@@ -1,0 +1,40 @@
+{
+  "model_id": {
+    "description": "明确的 Cursor 模型 ID",
+    "type": "string",
+    "default": "",
+    "hint": "自行运行官方 agent models 并确认该模型计入你的套餐后填写。禁止 Auto；插件不会自动选择或回退。原生模型配置必须使用同一个 ID。"
+  },
+  "ssh_host": {
+    "description": "Cursor 专用容器的内部主机名",
+    "type": "string",
+    "default": "cursor-cli"
+  },
+  "ssh_port": {
+    "description": "内部 SSH 端口",
+    "type": "int",
+    "default": 2222
+  },
+  "identity_file": {
+    "description": "仅用于受限 Runner 的 SSH 私钥路径",
+    "type": "string",
+    "default": "/run/cursor-client/id_ed25519",
+    "hint": "填 AstrBot 容器内只读挂载的文件路径，不填私钥内容。"
+  },
+  "known_hosts_file": {
+    "description": "已核验的 SSH 主机公钥文件",
+    "type": "string",
+    "default": "/run/cursor-client/known_hosts"
+  },
+  "ssh_binary": {
+    "description": "OpenSSH 客户端路径",
+    "type": "string",
+    "default": "/usr/bin/ssh"
+  },
+  "timeout_seconds": {
+    "description": "CLI 超时秒数（1–600）",
+    "type": "int",
+    "default": 120,
+    "hint": "SSH 总超时比此值多 15 秒。超时不自动重试；请先检查 Cursor 用量。"
+  }
+}

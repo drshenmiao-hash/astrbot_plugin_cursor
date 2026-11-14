@@ -1,0 +1,15 @@
+# Merge these fields into a COPY of your current AstrBot compose service.
+# This is an example fragment, not a complete AstrBot deployment.
+services:
+  astrbot:
+    image: astrbot-with-cursor-ssh:4.29.4
+    volumes:
+      # Keep your existing AstrBot data/platform mounts in your actual compose.
+      - ./client:/run/cursor-client:ro
+    networks:
+      # Keep existing networks as well.
+      - cursor-link
+networks:
+  cursor-link:
+    external: true
+    name: astrbot-cursor-link

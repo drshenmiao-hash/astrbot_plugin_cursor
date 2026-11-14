@@ -1,0 +1,5 @@
+*
+!cursor_plugin/
+!cursor_plugin/*.py
+!runner/
+!runner/*

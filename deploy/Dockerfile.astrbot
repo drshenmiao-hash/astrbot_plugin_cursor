@@ -1,0 +1,8 @@
+# Build a NEW image from the exact AstrBot image you already use. Do not run
+# apt-get in the live container. Keep its existing entrypoint and command.
+ARG ASTRBOT_IMAGE
+FROM ${ASTRBOT_IMAGE}
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends openssh-client \
+    && rm -rf /var/lib/apt/lists/*
+# If your original image has a non-root USER, restore it in your own copy.

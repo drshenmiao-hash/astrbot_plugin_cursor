@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
+.env
+deploy/client/
+deploy/server/
+deploy/login/
+deploy/model_id
+*.zip
+*.tar.gz
+auth.json
+id_ed25519*
+ssh_host_*
+known_hosts

@@ -1,0 +1,50 @@
+name: astrbot-cursor
+services:
+  cursor-cli:
+    image: astrbot-cursor-cli:0.1.0
+    platform: linux/amd64
+    build:
+      context: ..
+      dockerfile: runner/Dockerfile
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Only the SSH daemon uses these, then drops privileges to uid 10001.
+    cap_add:
+      - CHOWN
+      - FOWNER
+      - SETUID
+      - SETGID
+      - SYS_CHROOT
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: 2
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777
+      - /run:rw,nosuid,nodev,noexec,size=16m,mode=755
+    volumes:
+      - ./server:/run/cursor-server:ro
+      - ./model_id:/etc/cursor-model-id:ro
+      - cursor-login:/var/lib/cursor-login
+    networks:
+      cursor-link:
+        aliases:
+          - cursor-cli
+      cursor-egress: {}
+    # No host ports, host filesystem, AstrBot data or Docker socket.
+    logging:
+      driver: local
+      options:
+        max-size: "1m"
+        max-file: "2"
+networks:
+  cursor-link:
+    external: true
+    name: astrbot-cursor-link
+  cursor-egress: {}
+volumes:
+  cursor-login: {}
