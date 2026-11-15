@@ -8,15 +8,11 @@ from dataclasses import dataclass, field
 from .acp import ACPClient
 from .errors import CursorError
 from .launcher import ProcessOwner, ssh_error_code
-from .logic import compare_history_hashes, history_hashes
+from .logic import history_state, reconcile_history
 from .metrics import record
 from .protocol import encode
 from .queueing import RequestQueue
 from .transcript import render_messages
-
-
-def fingerprints(messages):
-    return history_hashes(messages)
 
 
 @dataclass
@@ -125,11 +121,23 @@ class Engine:
 
     def _reuse(self, messages, scope):
         cached = self.sessions.get(scope) if scope else None
-        current = fingerprints(messages)
-        plan = compare_history_hashes(cached["confirmed"] if cached else [], current)
+        plan = reconcile_history(
+            cached["history"] if cached else None,
+            messages,
+            last_request_hashes=cached["request_hashes"] if cached else None,
+        )
         if cached and plan["reused"]:
-            return cached, messages[plan["delta_start"] :]
-        return None, messages
+            return cached, plan
+        return None, plan
+
+    def _no_new_input(self, job, cached):
+        # Do not send a system-only prompt or acknowledge pending system changes.
+        # They are diffed against the last successfully applied state next turn.
+        reply = cached["last_reply"] if cached else ""
+        job.reused = cached is not None
+        job.reset_reason = "cached_reply" if cached else "no_new_user_input"
+        job.output_bytes = len(reply.encode())
+        return reply
 
     async def _new_client(self):
         owner = self.owner_factory(self.cfg)
@@ -228,12 +236,13 @@ class Engine:
             await asyncio.gather(turn, return_exceptions=True)
 
     async def _execute(self, job, client):
-        cached, delta = self._reuse(job.messages, job.scope)
-        if not delta:
-            raise CursorError("empty_input")
+        cached, plan = self._reuse(job.messages, job.scope)
+        if not plan["has_new_user_input"]:
+            return self._no_new_input(job, cached)
+        delta = plan["delta"]
         job.reused = cached is not None
         job.reset_reason = (
-            "continuous_history"
+            ("system_updated" if plan["system_changed"] else "continuous_history")
             if cached
             else ("history_changed" if job.scope in self.sessions else "new_conversation")
         )
@@ -252,9 +261,11 @@ class Engine:
             if job.scope:
                 self.sessions[job.scope] = {
                     "session_id": session_id,
-                    "confirmed": fingerprints(
+                    "history": history_state(
                         job.messages + [{"role": "assistant", "content": reply}]
                     ),
+                    "request_hashes": history_state(job.messages)["dialogue_hashes"],
+                    "last_reply": reply,
                 }
             if self.owner is not None:
                 self.owner.sync_credentials()
@@ -286,6 +297,13 @@ class Engine:
             try:
                 if job.cancel.is_set() or job.future.cancelled():
                     code = "cancelled"
+                    continue
+                cached, plan = self._reuse(job.messages, job.scope)
+                if not plan["has_new_user_input"]:
+                    job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
+                    job.process_reused = bool(self.client and not self.client.closed)
+                    job.started.set()
+                    result = self._no_new_input(job, cached)
                     continue
                 client = await asyncio.wait_for(
                     self._lease(job), max(0.001, job.deadline - time.monotonic())

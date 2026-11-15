@@ -25,7 +25,7 @@ class CursorCLIPlugin(Star):
         """Show this version's license and corresponding source."""
         yield event.plain_result(
             "astrbot_plugin_cursor v0.2.0 · AGPL-3.0\n"
-            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/main"
+            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/fix/persistent-cli-provider"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)

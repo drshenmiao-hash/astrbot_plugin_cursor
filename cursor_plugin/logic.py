@@ -27,7 +27,7 @@ def compare_history_hashes(old_hashes, new_hashes, *, tail_count=2):
         tail_rule = "empty"
     else:
         tail_rule = "match" if list(old_hashes[-tail_size:]) == prefix[-tail_size:] else "changed"
-    # Full-prefix equality is authoritative. Length/tail are diagnostic evidence,
+    # Full dialogue-prefix equality is authoritative. Length/tail are diagnostic evidence,
     # never substitutes for checking middle messages.
     reused = old_size > 0 and hash_rule == "match"
     reason = (
@@ -49,11 +49,81 @@ def compare_history_hashes(old_hashes, new_hashes, *, tail_count=2):
     }
 
 
-def history_plan(old_history, new_history, *, tail_count=2):
+def history_state(history):
+    """Keep system separately; tolerate strip() of assistant replies in history.
+
+    Only assistant boundary whitespace is canonicalized, and only for matching.
+    User text (including injected reminders) and transmitted messages stay intact.
+    """
+    systems = [dict(item) for item in history if item.get("role") == "system"]
+    dialogue = [item for item in history if item.get("role") != "system"]
+    canonical = [
+        {**item, "content": item["content"].strip()}
+        if item.get("role") == "assistant" and isinstance(item.get("content"), str)
+        else item
+        for item in dialogue
+    ]
+    return {"systems": systems, "dialogue_hashes": history_hashes(canonical)}
+
+
+def system_delta(old_systems, new_systems):
+    """One transcript entry containing changes to the last applied system state."""
+    operations = [
+        {"op": "remove", "index": index}
+        for index in range(len(old_systems) - 1, len(new_systems) - 1, -1)
+    ]
+    for index, new in enumerate(new_systems):
+        content = new.get("content", "")
+        if index >= len(old_systems):
+            operations.append({"op": "add", "index": index, "content": content})
+            continue
+        old = old_systems[index].get("content", "")
+        if content == old:
+            continue
+        if isinstance(old, str) and isinstance(content, str) and old and content.startswith(old):
+            operations.append({"op": "append", "index": index, "content": content[len(old) :]})
+        else:
+            operations.append({"op": "replace", "index": index, "content": content})
+    if not operations:
+        return None
+    return {
+        "role": "system",
+        "content": (
+            "Update the previous system entries of this transcript before answering. "
+            "Indices are zero-based among system entries. Apply these operations in order: "
+            "append extends an entry; replace supersedes its previous content; "
+            "add introduces an entry; remove withdraws it. Unchanged entries remain in force.\n"
+            + json.dumps(operations, ensure_ascii=False, separators=(",", ":"))
+        ),
+    }
+
+
+def reconcile_history(previous, new_history, *, last_request_hashes=None, tail_count=2):
+    """Match only dialogue; return pending system updates alongside new dialogue."""
+    state = history_state(new_history)
+    dialogue = [item for item in new_history if item.get("role") != "system"]
     result = compare_history_hashes(
-        history_hashes(old_history), history_hashes(new_history), tail_count=tail_count
+        previous["dialogue_hashes"] if previous else [],
+        state["dialogue_hashes"],
+        tail_count=tail_count,
     )
-    return {**result, "delta": list(new_history[result["delta_start"] :])}
+    # A retry may repeat the input *without* our already-generated assistant reply.
+    # Match that request too, rather than reopening a session or generating twice.
+    if previous and last_request_hashes and state["dialogue_hashes"] == last_request_hashes:
+        result.update(reused=True, delta_start=len(dialogue), reason="request_replay")
+    dialogue_delta = dialogue[result["delta_start"] :]
+    update = system_delta(previous["systems"], state["systems"]) if previous else None
+    delta = ([update] if update else []) + dialogue_delta if result["reused"] else list(new_history)
+    return {
+        **result,
+        "delta": delta,
+        "system_changed": update is not None,
+        "has_new_user_input": any(item.get("role") == "user" for item in dialogue_delta),
+    }
+
+
+def history_plan(old_history, new_history, *, tail_count=2):
+    return reconcile_history(history_state(old_history), new_history, tail_count=tail_count)
 
 
 def queue_execution_order(requests, *, active_sessions=()):
