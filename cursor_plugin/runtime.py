@@ -10,6 +10,7 @@ from .engine import Engine
 from .errors import CursorError
 from .models import ModelResolutionError, catalog_ids, resolve_model
 from .settings import settings_from
+from .usage import UsageStore, format_summary
 
 PROVIDER_TYPE = "cursor_cli"
 DEFAULT_SOURCE_ID = PROVIDER_TYPE
@@ -17,6 +18,50 @@ logger = logging.getLogger("astrbot")
 _settings = None
 _engine = None
 _available_models = None
+_usage_store = None
+
+
+def configure_usage(context, *, directory=None):
+    """Use only our plugin data subdirectory, independent of AstrBot config writes."""
+    global _usage_store
+    from .metrics import set_usage_store
+
+    try:
+        if directory is None:
+            from pathlib import Path
+
+            from astrbot.core.utils.astrbot_path import get_astrbot_plugin_data_path
+
+            directory = Path(get_astrbot_plugin_data_path()) / "astrbot_plugin_cursor"
+        existing = getattr(context, "_astrbot_cursor_usage_store", None)
+        if existing is not None and not existing._closed:
+            _usage_store = existing
+        else:
+            _usage_store = UsageStore(directory)
+            context._astrbot_cursor_usage_store = _usage_store
+    except Exception:
+        _usage_store = None
+        logger.warning("cursor_local_usage code=initialization_failed")
+    set_usage_store(_usage_store)
+    return _usage_store
+
+
+def usage_session(raw):
+    return _usage_store.session_label(raw) if _usage_store is not None else None
+
+
+async def local_usage(group="total", key=""):
+    if _usage_store is None:
+        return "插件本地统计尚未初始化或无法写入，请检查插件数据目录权限；这不是 Cursor 账单。"
+    try:
+        report = await asyncio.to_thread(_usage_store.summary, group, key)
+        return format_summary(report)
+    except ValueError:
+        return (
+            "用法：/cursor_usage [total|session|day|model] [具体值]；日期按 UTC。这是插件本地统计。"
+        )
+    except Exception:
+        return "无法读取插件本地统计，请检查数据目录和统计写入错误日志；这不是 Cursor 账单。"
 
 
 def configure(config):

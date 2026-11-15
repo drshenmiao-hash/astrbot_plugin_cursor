@@ -1,5 +1,12 @@
 # 变更记录
 
+## 插件本地统计（当前分支补丁）
+
+- request_finished 元数据异步落入插件专属 SQLite，成功/失败均记录；按总计、匿名会话、UTC 日期、实际 ACP modelId 汇总。
+- 新增仅管理员可用的 `/cursor_usage [total|session|day|model] [具体值]`。明确标注本地统计，不查询或声称官方账单/套餐消耗。
+- 缓存/排队等未记录到 ACP 发送的请求单独分组；不增加模型请求或并发，不改缓存 key、默认/备用及其它提供商配置。
+- 14 项统计回归与已有 55 项合跑共 69 项通过，完整输出见 `docs/LOCAL_USAGE_TEST_OUTPUT.txt`。
+
 ## ACP 模型 ID 解析（当前分支补丁）
 
 - 启动/重载/显式校验时通过 ACP `session/new` 拉取一次 availableModels；最终以 modelId 为准，不用管理端 models 名单代替。

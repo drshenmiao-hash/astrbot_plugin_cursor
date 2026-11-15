@@ -35,6 +35,8 @@ class Job:
     process_reused: bool = False
     accounted: bool = False
     sequence: int | None = None
+    stats_session: str | None = None
+    model_id: str | None = None
 
 
 class Engine:
@@ -65,7 +67,7 @@ class Engine:
                     for i in range(self.cfg["max_concurrency"])
                 ]
 
-    async def submit(self, messages, scope, *, on_queued=None, sequence=None):
+    async def submit(self, messages, scope, *, on_queued=None, sequence=None, stats_session=None):
         await self._start_workers()
         now = time.monotonic()
         size = len(encode(messages))
@@ -81,6 +83,7 @@ class Engine:
             size,
         )
         job.sequence = sequence if type(sequence) is int else None
+        job.stats_session = stats_session
         self._jobs[job.request_id] = job
 
         async def queue_notice():
@@ -303,6 +306,7 @@ class Engine:
                 await asyncio.gather(turn, return_exceptions=True)
             job.wire_bytes = stats.get("wire_bytes", job.wire_bytes)
             job.output_bytes = stats.get("output_bytes", job.output_bytes)
+            job.model_id = stats.get("model_id")
 
     async def _worker(self):
         while True:
@@ -386,7 +390,8 @@ class Engine:
         record(
             "request_finished",
             request_id=job.request_id,
-            session=job.scope,
+            session=job.stats_session or job.scope,
+            model_id=job.model_id,
             code=code,
             input_bytes=job.input_bytes,
             sent_input_bytes=job.sent_bytes,

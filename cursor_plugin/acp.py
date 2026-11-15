@@ -21,6 +21,7 @@ class ACPClient:
         self.initialized = None
         self.pending = {}
         self.turns = {}
+        self.session_models = {}
         self._next_id = 0
         self._write_lock = asyncio.Lock()
         self._reader_task = asyncio.create_task(self._read_loop())
@@ -149,6 +150,7 @@ class ACPClient:
         ):
             raise CursorError("model_mismatch")
         await self.call("session/set_mode", {"sessionId": session_id, "modeId": "ask"}, timeout=30)
+        self.session_models[session_id] = model
         return session_id
 
     async def prompt(self, session_id, text, *, stats=None):
@@ -180,6 +182,9 @@ class ACPClient:
         finally:
             if stats is not None:
                 stats.update(wire_bytes=state.get("wire_bytes", 0), output_bytes=state["size"])
+                stats["model_id"] = (
+                    self.session_models.get(session_id) if state.get("wire_bytes", 0) else None
+                )
             self.turns.pop(session_id, None)
             self.last_activity = time.monotonic()
 

@@ -159,9 +159,11 @@ class CursorCLIProvider(Provider):
         origin = getattr(event, "unified_msg_origin", "") if event is not None else ""
         stable = conversation_id or session_id
         scope = None
+        stats_session = None
         if isinstance(stable, str) and stable:
             raw = f"{self.provider_config.get('id', '')}\0{origin}\0{stable}"
             scope = hashlib.blake2s(raw.encode(), key=_SESSION_SALT, digest_size=16).hexdigest()
+            stats_session = runtime.usage_session(raw)
 
         async def on_queued(depth):
             if event is not None:
@@ -172,7 +174,13 @@ class CursorCLIProvider(Provider):
                 )
 
         task = asyncio.create_task(
-            self.engine.submit(messages, scope, on_queued=on_queued, sequence=request_sequence)
+            self.engine.submit(
+                messages,
+                scope,
+                on_queued=on_queued,
+                sequence=request_sequence,
+                stats_session=stats_session,
+            )
         )
         self._pending.add(task)
         try:

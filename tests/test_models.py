@@ -24,6 +24,7 @@ _REAL_FETCH = runtime._fetch_available_models
 def memory_acp(catalog):
     client = ACPClient.__new__(ACPClient)
     client.ready = {"cwd": "/work"}
+    client.session_models = {}
 
     async def rpc(method, params, *, timeout=None):
         if method == "session/new":

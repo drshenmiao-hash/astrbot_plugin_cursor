@@ -16,6 +16,7 @@ class CursorCLIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         runtime.configure(config)
+        runtime.configure_usage(context)
 
     async def initialize(self):
         await runtime.initialize(self.context)
@@ -27,6 +28,12 @@ class CursorCLIPlugin(Star):
             "astrbot_plugin_cursor v0.2.0 · AGPL-3.0\n"
             "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/fix/persistent-cli-provider"
         )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("cursor_usage")
+    async def cursor_usage(self, event: AstrMessageEvent, group: str = "total", key: str = ""):
+        """View this plugin's local counts; never queries Cursor billing or balance."""
+        yield event.plain_result(await runtime.local_usage(group, key))
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("cursor_doctor")
