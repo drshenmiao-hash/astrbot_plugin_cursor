@@ -1,0 +1,36 @@
+test_capabilities_are_text_only_in_saved_and_live_config (tests.test_registration.RegistrationTests.test_capabilities_are_text_only_in_saved_and_live_config) ... ok
+test_cold_start_syncs_config_and_defers_instances_to_host (tests.test_registration.RegistrationTests.test_cold_start_syncs_config_and_defers_instances_to_host) ... ok
+test_default_model_and_fallbacks_remain_unchanged (tests.test_registration.RegistrationTests.test_default_model_and_fallbacks_remain_unchanged) ... ok
+test_disabled_source_stays_disabled_and_new_model_is_disabled (tests.test_registration.RegistrationTests.test_disabled_source_stays_disabled_and_new_model_is_disabled) ... ok
+test_empty_or_auto_does_not_create_model_and_warns (tests.test_registration.RegistrationTests.test_empty_or_auto_does_not_create_model_and_warns) ... ok
+test_existing_oauth_and_deepseek_are_untouched (tests.test_registration.RegistrationTests.test_existing_oauth_and_deepseek_are_untouched) ... ok
+test_existing_source_and_model_are_updated_in_place (tests.test_registration.RegistrationTests.test_existing_source_and_model_are_updated_in_place) ... ok
+test_first_load_creates_exact_source_and_native_model (tests.test_registration.RegistrationTests.test_first_load_creates_exact_source_and_native_model) ... ok
+test_foreign_model_id_collision_never_overwrites (tests.test_registration.RegistrationTests.test_foreign_model_id_collision_never_overwrites) ... ok
+test_foreign_source_id_collision_never_overwrites (tests.test_registration.RegistrationTests.test_foreign_source_id_collision_never_overwrites) ... ok
+test_repeated_load_does_not_duplicate_or_rewrite_config (tests.test_registration.RegistrationTests.test_repeated_load_does_not_duplicate_or_rewrite_config) ... ok
+test_running_empty_manager_loads_model_without_selecting_it (tests.test_registration.RegistrationTests.test_running_empty_manager_loads_model_without_selecting_it) ... ok
+test_same_model_alias_is_not_duplicated_or_renamed (tests.test_registration.RegistrationTests.test_same_model_alias_is_not_duplicated_or_renamed) ... ok
+test_save_failure_rolls_back_only_registration (tests.test_registration.RegistrationTests.test_save_failure_rolls_back_only_registration) ... ok
+test_superseded_save_is_retried_once (tests.test_registration.RegistrationTests.test_superseded_save_is_retried_once) ... ok
+test_actual_sent_history_keeps_assistant_think_and_whitespace (tests.test_history_reuse.HistoryReuseTests.test_actual_sent_history_keeps_assistant_think_and_whitespace) ... ok
+test_assistant_boundary_whitespace_stripped (tests.test_history_reuse.HistoryReuseTests.test_assistant_boundary_whitespace_stripped) ... ok
+test_assistant_think_blocks_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_think_blocks_removed) ... ok
+test_assistant_thinking_blocks_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_thinking_blocks_removed) ... ok
+test_assistant_trailing_think_close_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_trailing_think_close_removed) ... ok
+test_identical_messages_replayed_with_and_without_reply (tests.test_history_reuse.HistoryReuseTests.test_identical_messages_replayed_with_and_without_reply) ... ok
+test_memory_attached_to_current_user_preserves_prior_reminders (tests.test_history_reuse.HistoryReuseTests.test_memory_attached_to_current_user_preserves_prior_reminders) ... ok
+test_replayed_input_with_system_change_defers_update (tests.test_history_reuse.HistoryReuseTests.test_replayed_input_with_system_change_defers_update) ... ok
+test_second_system_none_withdraws_once (tests.test_history_reuse.HistoryReuseTests.test_second_system_none_withdraws_once) ... ok
+test_system_append_sends_only_suffix (tests.test_history_reuse.HistoryReuseTests.test_system_append_sends_only_suffix) ... ok
+test_system_fixed_across_turns (tests.test_history_reuse.HistoryReuseTests.test_system_fixed_across_turns) ... ok
+test_system_memory_changes_every_turn (tests.test_history_reuse.HistoryReuseTests.test_system_memory_changes_every_turn) ... ok
+test_system_only_change_deferred_until_new_user (tests.test_history_reuse.HistoryReuseTests.test_system_only_change_deferred_until_new_user) ... ok
+test_system_timestamp_changes_every_turn (tests.test_history_reuse.HistoryReuseTests.test_system_timestamp_changes_every_turn) ... ok
+test_user_think_tags_and_whitespace_are_not_normalized (tests.test_history_reuse.HistoryReuseTests.test_user_think_tags_and_whitespace_are_not_normalized) ... ok
+test_visible_assistant_edit_still_rebuilds (tests.test_history_reuse.HistoryReuseTests.test_visible_assistant_edit_still_rebuilds) ... ok
+
+----------------------------------------------------------------------
+Ran 31 tests in 1.215s
+
+OK

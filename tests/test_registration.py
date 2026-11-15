@@ -1,0 +1,341 @@
+"""Exercise real native config/save/reload code with explicit host API doubles.
+
+No AstrBot install, CLI, subprocess, network, account or live config is accessed.
+ProviderManager and the resulting Provider instance are doubles; tests do not
+claim actual AstrBot/WebUI integration coverage.
+"""
+
+import sys
+import unittest
+from copy import deepcopy
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch
+
+from cursor_plugin import runtime
+from cursor_plugin.errors import CursorError
+
+MODEL = "explicit-plan-model"
+
+
+class Config(dict):
+    def __init__(self, **values):
+        super().__init__(values)
+        self.saved = []
+        self.results = []
+
+    async def save_config_async(self):
+        self.saved.append(deepcopy(dict(self)))
+        result = self.results.pop(0) if self.results else True
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+class NativeModel:
+    def __init__(self, config):
+        self.config = deepcopy(config)
+        self.closed = False
+
+
+class Manager:
+    def __init__(self, config, *, running=True):
+        self.config = config
+        self.providers_config = config["provider"]
+        self.provider_sources_config = config["provider_sources"]
+        self.inst_map = {model["id"]: object() for model in config["provider"]} if running else {}
+        self.curr_provider_inst = self.inst_map.get("oauth-model")
+        self._mcp_init_task = object() if running else None
+        self.reloads = []
+
+    async def reload(self, model):
+        self.reloads.append(model["id"])
+        source = next(
+            (s for s in self.provider_sources_config if s["id"] == model.get("provider_source_id")),
+            {},
+        )
+        merged = {**source, **model}
+        if merged.get("type") != "cursor_cli":
+            raise AssertionError("Plugin tried to reload an unrelated provider")
+        old = self.inst_map.pop(model["id"], None)
+        if isinstance(old, NativeModel):
+            old.closed = True
+        if model.get("enable", True):
+            self.inst_map[model["id"]] = NativeModel(merged)
+            # Deliberately emulate a host that selects while loading. The plugin
+            # must restore the previous selection, including None, afterwards.
+            self.curr_provider_inst = self.inst_map[model["id"]]
+
+
+def existing_config():
+    return Config(
+        provider_sources=[
+            {
+                "id": "oauth-source",
+                "type": "OpenAI Subscribe",
+                "key": "DUMMY_OAUTH",
+                "api_base": "https://example.invalid/oauth",
+                "enable": True,
+                "oauth_accounts": [{"id": "local", "key": "DUMMY_ACCOUNT"}],
+                "oauth_routing": {"models": {"oauth-model": "local"}},
+            },
+            {
+                "id": "deepseek-source",
+                "type": "openai_chat_completion",
+                "key": ["DUMMY_DS"],
+                "api_base": "https://example.invalid/deepseek",
+                "enable": True,
+            },
+        ],
+        provider=[
+            {
+                "id": "oauth-model",
+                "provider_source_id": "oauth-source",
+                "enable": True,
+                "model": "oauth-pinned",
+                "modalities": ["text", "image", "tool_use"],
+            },
+            {
+                "id": "deepseek-model",
+                "provider_source_id": "deepseek-source",
+                "enable": True,
+                "model": "deepseek-chat",
+                "modalities": ["text", "tool_use"],
+            },
+        ],
+        provider_settings={"fallback_chat_models": ["deepseek-model", "oauth-model"]},
+        agent={"runtime": "astrbot", "config": {"model": {"provider_id": "oauth-model"}}},
+        session_preferences={"group": {"model": "deepseek-model"}},
+    )
+
+
+class RegistrationTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.original_settings = runtime._settings
+        self.original_engine = runtime._engine
+        runtime._engine = None
+        runtime.configure({"model_id": MODEL})
+        self.conf = existing_config()
+        self.manager = Manager(self.conf)
+        self.context = SimpleNamespace(
+            astrbot_config_mgr=SimpleNamespace(default_conf=self.conf),
+            provider_manager=self.manager,
+        )
+        provider = ModuleType("cursor_plugin.provider")
+        provider.CursorCLIProvider = NativeModel
+        self.provider_patch = patch.dict(sys.modules, {"cursor_plugin.provider": provider})
+        self.provider_patch.start()
+        self.addCleanup(self.provider_patch.stop)
+        self.process_patch = patch(
+            "asyncio.create_subprocess_exec",
+            side_effect=AssertionError("No processes in registration tests"),
+        )
+        self.process_patch.start()
+        self.addCleanup(self.process_patch.stop)
+
+    def tearDown(self):
+        runtime._settings = self.original_settings
+        runtime._engine = self.original_engine
+
+    def cursor_sources(self):
+        return [s for s in self.conf["provider_sources"] if s.get("type") == "cursor_cli"]
+
+    def cursor_models(self):
+        ids = {s["id"] for s in self.cursor_sources()}
+        return [m for m in self.conf["provider"] if m.get("provider_source_id") in ids]
+
+    async def test_first_load_creates_exact_source_and_native_model(self):
+        await runtime.initialize(self.context)
+        self.assertEqual(len(self.cursor_sources()), 1)
+        source = self.cursor_sources()[0]
+        self.assertEqual(source["type"], "cursor_cli")
+        self.assertEqual(source["key"], "")
+        self.assertEqual(source["api_base"], "")
+        model = self.cursor_models()[0]
+        self.assertEqual(model["id"], MODEL)
+        self.assertEqual(model["model"], MODEL)
+        self.assertEqual(model["provider_source_id"], source["id"])
+        self.assertEqual(self.manager.reloads, [MODEL])
+        self.assertIn(MODEL, self.manager.inst_map)
+        self.assertEqual(len(self.conf.saved), 1)
+        self.assertEqual(self.conf.saved[-1], dict(self.conf))
+
+    async def test_repeated_load_does_not_duplicate_or_rewrite_config(self):
+        await runtime.initialize(self.context)
+        first = self.manager.inst_map[MODEL]
+        before = deepcopy(dict(self.conf))
+        await runtime.initialize(self.context)
+        self.assertEqual(dict(self.conf), before)
+        self.assertEqual(len(self.cursor_sources()), 1)
+        self.assertEqual(len(self.cursor_models()), 1)
+        self.assertEqual(len(self.conf.saved), 1)
+        self.assertTrue(first.closed)
+        self.assertIsNot(self.manager.inst_map[MODEL], first)
+        self.assertEqual(len(self.manager.inst_map), 3)
+
+    async def test_empty_or_auto_does_not_create_model_and_warns(self):
+        for value in ["", " ", "auto", "AUTO", " auto ", "auto-smart", "default"]:
+            with self.subTest(model_id=value):
+                runtime.configure({"model_id": value})
+                conf = existing_config()
+                manager = Manager(conf)
+                context = SimpleNamespace(
+                    astrbot_config_mgr=SimpleNamespace(default_conf=conf), provider_manager=manager
+                )
+                before = deepcopy(conf["provider"])
+                with self.assertLogs("astrbot", level="WARNING") as messages:
+                    await runtime.initialize(context)
+                self.assertIn("model_id", "\n".join(messages.output))
+                self.assertIn("未创建原生模型", "\n".join(messages.output))
+                self.assertEqual(conf["provider"], before)
+                self.assertEqual(manager.reloads, [])
+                self.assertEqual(runtime.settings()["model"], "")
+                self.assertTrue(any(s["type"] == "cursor_cli" for s in conf["provider_sources"]))
+
+    async def test_default_model_and_fallbacks_remain_unchanged(self):
+        selected = self.manager.curr_provider_inst
+        fields = {
+            key: deepcopy(value)
+            for key, value in self.conf.items()
+            if key not in {"provider", "provider_sources"}
+        }
+        await runtime.initialize(self.context)
+        self.assertIs(self.manager.curr_provider_inst, selected)
+        self.assertEqual({key: self.conf[key] for key in fields}, fields)
+
+    async def test_existing_oauth_and_deepseek_are_untouched(self):
+        sources = deepcopy(self.conf["provider_sources"])
+        models = deepcopy(self.conf["provider"])
+        instances = dict(self.manager.inst_map)
+        await runtime.initialize(self.context)
+        await runtime.initialize(self.context)
+        self.assertEqual(self.conf["provider_sources"][:2], sources)
+        self.assertEqual(self.conf["provider"][:2], models)
+        for key, instance in instances.items():
+            self.assertIs(self.manager.inst_map[key], instance)
+        self.assertEqual(self.manager.reloads, [MODEL, MODEL])
+
+    async def test_capabilities_are_text_only_in_saved_and_live_config(self):
+        await runtime.initialize(self.context)
+        source = self.cursor_sources()[0]
+        model = self.cursor_models()[0]
+        for config in [source, model, self.manager.inst_map[MODEL].config]:
+            self.assertEqual(config["modalities"], ["text"])
+            self.assertEqual(config["key"], "")
+            self.assertEqual(config["api_base"], "")
+
+    async def test_existing_source_and_model_are_updated_in_place(self):
+        self.conf["provider_sources"].append(
+            {
+                "id": "custom-cursor",
+                "type": "cursor_cli",
+                "enable": True,
+                "key": ["OLD"],
+                "api_base": "old",
+            }
+        )
+        self.conf["provider"].append(
+            {
+                "id": MODEL,
+                "provider_source_id": "custom-cursor",
+                "model": "old-model",
+                "enable": True,
+                "modalities": ["text", "image", "tool_use"],
+                "temperature": 0.4,
+                "key": ["OLD"],
+            }
+        )
+        await runtime.initialize(self.context)
+        self.assertEqual(len(self.cursor_sources()), 1)
+        self.assertEqual(self.cursor_sources()[0]["id"], "custom-cursor")
+        self.assertEqual(len(self.cursor_models()), 1)
+        self.assertEqual(self.cursor_models()[0]["model"], MODEL)
+        self.assertEqual(self.cursor_models()[0]["temperature"], 0.4)
+        self.assertEqual(self.cursor_models()[0]["modalities"], ["text"])
+
+    async def test_same_model_alias_is_not_duplicated_or_renamed(self):
+        self.conf["provider_sources"].append({"id": "custom-cursor", "type": "cursor_cli"})
+        model = {
+            "id": "old-cursor-alias",
+            "model": MODEL,
+            "enable": True,
+            "provider_source_id": "custom-cursor",
+        }
+        self.conf["provider"].append(model)
+        old = NativeModel(model)
+        self.manager.inst_map[model["id"]] = old
+        self.manager.curr_provider_inst = old
+        self.conf["agent"]["config"]["model"]["provider_id"] = model["id"]
+        await runtime.initialize(self.context)
+        self.assertEqual([m["id"] for m in self.cursor_models()], [model["id"]])
+        self.assertIs(self.manager.curr_provider_inst, self.manager.inst_map[model["id"]])
+        self.assertEqual(self.conf["agent"]["config"]["model"]["provider_id"], model["id"])
+        self.assertTrue(old.closed)
+
+    async def test_disabled_source_stays_disabled_and_new_model_is_disabled(self):
+        self.conf["provider_sources"].append(
+            {"id": "custom-cursor", "type": "cursor_cli", "enable": False}
+        )
+        await runtime.initialize(self.context)
+        self.assertFalse(self.cursor_sources()[0]["enable"])
+        self.assertFalse(self.cursor_models()[0]["enable"])
+        self.assertEqual(self.manager.reloads, [])
+
+    async def test_foreign_model_id_collision_never_overwrites(self):
+        self.conf["provider"][0]["id"] = MODEL
+        before = deepcopy(self.conf["provider"])
+        with self.assertLogs("astrbot", level="WARNING") as messages:
+            await runtime.initialize(self.context)
+        self.assertIn("其他提供商占用", "\n".join(messages.output))
+        self.assertEqual(self.conf["provider"], before)
+        self.assertEqual(self.cursor_models(), [])
+        self.assertEqual(self.manager.reloads, [])
+
+    async def test_foreign_source_id_collision_never_overwrites(self):
+        self.conf["provider_sources"][0]["id"] = "cursor_cli"
+        before = deepcopy(dict(self.conf))
+        with self.assertRaises(CursorError) as error:
+            await runtime.initialize(self.context)
+        self.assertEqual(error.exception.code, "source_id_conflict")
+        self.assertEqual(dict(self.conf), before)
+        self.assertEqual(self.conf.saved, [])
+
+    async def test_cold_start_syncs_config_and_defers_instances_to_host(self):
+        self.manager = Manager(self.conf, running=False)
+        self.context.provider_manager = self.manager
+        await runtime.initialize(self.context)
+        self.assertEqual(len(self.cursor_models()), 1)
+        self.assertIs(self.manager.providers_config, self.conf["provider"])
+        self.assertIs(self.manager.provider_sources_config, self.conf["provider_sources"])
+        self.assertEqual(self.manager.inst_map, {})
+        self.assertEqual(self.manager.reloads, [])
+        self.assertIsNone(self.manager.curr_provider_inst)
+
+    async def test_running_empty_manager_loads_model_without_selecting_it(self):
+        self.conf["provider"] = []
+        self.manager = Manager(self.conf)
+        self.context.provider_manager = self.manager
+        self.assertIsNone(self.manager.curr_provider_inst)
+        await runtime.initialize(self.context)
+        self.assertIn(MODEL, self.manager.inst_map)
+        self.assertIsNone(self.manager.curr_provider_inst)
+
+    async def test_save_failure_rolls_back_only_registration(self):
+        before = deepcopy(dict(self.conf))
+        selected = self.manager.curr_provider_inst
+        self.conf.results = [OSError("simulated write failure")]
+        with self.assertRaises(CursorError) as error:
+            await runtime.initialize(self.context)
+        self.assertEqual(error.exception.code, "registration_save_failed")
+        self.assertEqual(dict(self.conf), before)
+        self.assertEqual(self.manager.reloads, [])
+        self.assertIs(self.manager.curr_provider_inst, selected)
+
+    async def test_superseded_save_is_retried_once(self):
+        self.conf.results = [False, True]
+        await runtime.initialize(self.context)
+        self.assertEqual(len(self.conf.saved), 2)
+        self.assertEqual(len(self.cursor_models()), 1)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

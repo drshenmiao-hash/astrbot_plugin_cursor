@@ -3,7 +3,7 @@
     "description": "明确的 Cursor 模型 ID",
     "type": "string",
     "default": "",
-    "hint": "自行运行官方 agent models 并确认该模型计入你的套餐后填写。禁止 Auto；插件不会自动选择或回退。原生模型配置必须使用同一个 ID。"
+    "hint": "自行确认套餐内模型后填写。安装/重载自动创建 cursor_cli 来源和原生模型；新建模型 id、model 均与此值一致。留空或 auto 只建来源并提示，不创建模型，不改变默认或备用模型。"
   },
   "ssh_host": {
     "description": "Cursor 专用容器的内部主机名",

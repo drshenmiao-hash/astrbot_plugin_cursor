@@ -9,11 +9,13 @@ from astrbot_plugin_openai_oauth by wcqqq1214 and contributors, licensed under
 AGPL-3.0:
 https://github.com/wcqqq1214/astrbot_plugin_openai_oauth
 Upstream revision: 173f343b8ffff76ddee288ab71dfcf7c57a5c589
-Original files: src/provider.py and src/runtime.py
+Original files: src/provider.py, src/runtime.py and src/provider_registry.py
 
 The adapted registration and reload code was modified on 2026-11-15 to use
 Cursor-owned source IDs and the Cursor CLI provider. OAuth authentication,
 account management and upstream HTTP endpoints are not included.
+Source factory, configuration snapshot/save/rollback and manager synchronization
+patterns are also adapted for automatic native Cursor source/model registration.
 
 The MIT notice covering this project's original code is preserved in
 licenses/MIT-origin.txt. The combined distribution is provided under AGPL-3.0.

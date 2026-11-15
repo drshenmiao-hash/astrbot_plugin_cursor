@@ -17,15 +17,7 @@ from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
 
-TEMPLATE = {
-    "id": "cursor-cli",
-    "provider": "cursor",
-    "type": runtime.PROVIDER_TYPE,
-    "provider_type": "chat_completion",
-    "enable": True,
-    "key": [],
-    "api_base": "",
-}
+TEMPLATE = runtime._build_default_source_config()
 
 
 def register_adapter(cls):

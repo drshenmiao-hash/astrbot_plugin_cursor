@@ -17,6 +17,12 @@ def settings_from(config):
             raise ValueError
         options = {"transport": mode, "host": host, "model": config.get("model_id", "")}
         options["protected_paths"] = [str(Path(__file__).resolve().parents[1])]
+        if not isinstance(options["model"], str):
+            raise ValueError
+        if options["model"].strip().lower() in {"", "auto", "auto-smart", "default"}:
+            # Install the source, but let initialize() report that no explicit
+            # model was selected. Never substitute a model for these values.
+            options["model"] = ""
         if options["model"]:
             explicit_model(options["model"])
         for name, default, low, high in (

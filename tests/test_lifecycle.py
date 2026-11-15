@@ -39,6 +39,11 @@ class Manager:
         self.inst_map.pop(pid, None)
 
 
+class Config(dict):
+    async def save_config_async(self):
+        return True
+
+
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.manager = Manager()
@@ -48,16 +53,18 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             "enable": True,
             "model": "mock-plan-model",
         }
-        self.config = {
-            "provider_sources": [
-                {"id": "cursor-source", "type": "cursor_cli"},
-                {"id": "oauth-source", "type": "OpenAI Subscribe"},
-            ],
-            "provider": [
-                self.model,
-                {"id": "oauth-model", "type": "OpenAI Subscribe", "enable": True},
-            ],
-        }
+        self.config = Config(
+            {
+                "provider_sources": [
+                    {"id": "cursor-source", "type": "cursor_cli"},
+                    {"id": "oauth-source", "type": "OpenAI Subscribe"},
+                ],
+                "provider": [
+                    self.model,
+                    {"id": "oauth-model", "type": "OpenAI Subscribe", "enable": True},
+                ],
+            }
+        )
         self.context = SimpleNamespace(
             provider_manager=self.manager,
             astrbot_config_mgr=SimpleNamespace(default_conf=self.config),
@@ -70,9 +77,11 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await self.manager.terminate_provider(pid)
 
     async def test_cold_start_leaves_unloaded_models_to_host(self):
+        self.manager.inst_map.clear()
+        self.manager.curr_provider_inst = None
         await self.plugin.initialize()
         self.assertEqual(self.manager.reloads, [])
-        self.assertIs(self.manager.curr_provider_inst, self.manager.oauth)
+        self.assertIsNone(self.manager.curr_provider_inst)
 
     async def test_reload_retained_cursor_and_preserve_oauth_selection(self):
         old = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})

@@ -1,6 +1,8 @@
 """Typed, fixed errors for routing and diagnostics; upstream payloads stay private."""
 
 MESSAGES = {
+    "registration_save_failed": "Cursor 来源或模型配置未能保存，请检查 AstrBot 配置写入权限并重载插件。",
+    "source_id_conflict": "cursor_cli 来源 ID 已被其他提供商占用；未覆盖已有配置，请处理冲突后重载。",
     "config": "Cursor 配置无效，请检查插件配置。",
     "model": "请明确配置同一个 Cursor 模型 ID；不支持 Auto 或默认路由。",
     "model_unavailable": "指定模型不在 Cursor 返回的模型列表中；没有自动更换模型。",

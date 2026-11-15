@@ -2,9 +2,11 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 待环境验收。历史复用补丁的 16 项内存回归测试已执行通过。常驻 CLI、SSH、本地隔离、真实联通与计费尚未完成环境验收。
+> 0.2.0 待环境验收。15 项自动注册及 16 项历史复用回归已执行通过。常驻 CLI、SSH、本地隔离、真实联通与计费尚未完成环境验收。
 
 基础版本已合入默认分支 `main`。最新历史复用补丁位于 `fix/persistent-cli-provider`，见 [补丁说明](docs/HISTORY_PATCH.md)。
+
+同一分支还包含自动注册补丁：保存明确的 `model_id` 后重载插件，即会新增来源和原生模型，不需要在面板手工添加。原有默认模型和备用模型保持不变。
 
 ## 本次修改
 
@@ -20,7 +22,7 @@
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `model_id` | 空 | 必须填写明确、套餐范围已确认的模型 ID；原生模型使用同一个 ID |
+| `model_id` | 空 | 明确、套餐范围已确认的模型 ID；新建原生模型的 `id` 和 `model` 均取此值；空/auto 不建模型 |
 | `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
 | `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
 | `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
@@ -37,7 +39,9 @@
 | `known_hosts_file` | `/run/cursor-client/known_hosts` | 固定主机公钥 |
 | `ssh_binary` | `/usr/bin/ssh` | OpenSSH 客户端 |
 
-在 AstrBot 添加 `cursor_cli` 来源，Key、API Base 留空，再添加与 `model_id` 相同的原生聊天模型。已有 OpenAI OAuth 配置和备用模型设置保持原样。
+插件安装/重载时自动确保 `cursor_cli` 来源存在，Key、API Base 留空；模型只声明 `text`。重复加载会更新或复用已有配置，不重复新增。只在你自行选择后使用 Cursor，插件不切换当前默认模型，也不改 OpenAI OAuth、DeepSeek 或备用模型设置。
+
+已存在同一 Cursor 模型、但原生 `id` 是自定义别名时，沿用该条目，`model` 保持与配置完全相同，不重命名或另建一份，以免破坏默认/备用引用。ID 被其他提供商占用时提示冲突，不覆盖配置。细节见 [自动注册说明](docs/REGISTRATION.md)。
 
 ## 复用与并发的边界
 
@@ -67,6 +71,9 @@ python tests/check_logic.py
 
 # 历史复用回归，实际运行 Engine；ACP 对端为内存替身，无子进程或网络
 python -m unittest -v tests.test_history_reuse
+
+# 自动注册回归，使用配置保存/ProviderManager 测试替身
+python -m unittest -v tests.test_registration
 
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock

@@ -1,9 +1,9 @@
 # 安装与升级
 
-当前实现位于默认分支 `main`。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
+基础版本位于默认分支 `main`，本次自动注册和历史复用补丁仅在 `fix/persistent-cli-provider`。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
 
 ```bash
-git clone https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
+git clone --branch fix/persistent-cli-provider https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
 cd /opt/astrbot-cursor
 ```
 
@@ -95,10 +95,10 @@ SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。�
 
 ## 安装插件与检查
 
-在测试实例的 AstrBot 插件页使用 `https://github.com/drshenmiao-hash/astrbot_plugin_cursor` 安装或更新。也可将源码放入 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。
+本次测试使用上述分支的源码，放入测试实例的 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。从仓库默认分支安装仍获得 main，不含本次自动注册补丁。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
-2. 添加 `cursor_cli` 来源，Key、API Base 留空，添加相同 ID 的原生聊天模型。
+2. 插件自动新增 `cursor_cli` 来源及原生模型，无需手工添加。Key、API Base 留空，能力仅 text；新模型的 `id` 和 `model` 都与 `model_id` 完全相同。空/auto 时只确保来源存在并明确提示，不创建模型或自动选模型。
 3. 以 AstrBot 管理员运行 `/cursor_doctor`。也可在插件根目录执行下列命令；配置 JSON 只包含插件设置，不包含令牌：
 
 ```bash
@@ -106,6 +106,8 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 ```
 
 环境检查、模拟进程脚本和真实请求验收见 [ACCEPTANCE.md](ACCEPTANCE.md)。WebUI“测试模型”和开启模型请求的验收脚本会消耗真实用量。
+
+自动注册不改变当前默认模型。需要使用 Cursor 时由你在目标会话中选择；已有来源和相同模型会复用，不重复创建或改名。ID 冲突时不会覆盖其他提供商，见 [注册规则](REGISTRATION.md)。
 
 ## 升级与回滚
 
