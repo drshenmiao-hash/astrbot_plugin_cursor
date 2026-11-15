@@ -1,9 +1,9 @@
 # 安装与升级
 
-当前实现位于 `fix/persistent-cli-provider` 开发分支。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
+当前实现位于默认分支 `main`。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
 
 ```bash
-git clone --branch fix/persistent-cli-provider https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
+git clone https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
 cd /opt/astrbot-cursor
 ```
 
@@ -95,7 +95,7 @@ SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。�
 
 ## 安装插件与检查
 
-开发分支测试时，将该分支源码放入测试实例的 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。直接从仓库默认分支安装会获得旧版本。
+在测试实例的 AstrBot 插件页使用 `https://github.com/drshenmiao-hash/astrbot_plugin_cursor` 安装或更新。也可将源码放入 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
 2. 添加 `cursor_cli` 来源，Key、API Base 留空，添加相同 ID 的原生聊天模型。

@@ -2,9 +2,9 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 开发分支。纯逻辑检查已执行；常驻进程、SSH、本地隔离、真实联通与计费尚未完成环境验收。
+> 0.2.0 待环境验收。纯逻辑检查已执行；常驻进程、SSH、本地隔离、真实联通与计费尚未完成环境验收。
 
-本次代码在 [`fix/persistent-cli-provider`](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/fix/persistent-cli-provider)。默认分支仍是旧版；测试本次修改请下载该分支或使用本次提交的源码包。
+本次代码已合入默认分支 `main`，可通过 AstrBot 插件页使用本仓库地址安装或更新。建议先在独立测试实例完成环境验收。
 
 ## 本次修改
 
