@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Adapter registration adapted from astrbot_plugin_openai_oauth; see NOTICE.
 """A native AstrBot chat provider backed exclusively by official Cursor CLI."""
 
 import asyncio
@@ -31,12 +33,13 @@ def register_adapter(cls):
             default_config_tmpl=dict(TEMPLATE),
             provider_display_name="Cursor CLI",
         )(cls)
-    else:
-        # The map survives plugin reload. Reject an unrelated name collision.
-        if not getattr(metadata.cls_type, "_astrbot_cursor_plugin", False):
-            raise CursorError("config")
-        metadata.cls_type = cls
-        metadata.default_config_tmpl = dict(TEMPLATE)
+    elif not getattr(metadata.cls_type, "_astrbot_cursor_plugin", False):
+        raise CursorError("config")
+    # AstrBot keeps the registry across module reloads. Publish the new class
+    # every time, as in the reference plugin, without registering twice.
+    metadata = provider_cls_map[runtime.PROVIDER_TYPE]
+    metadata.cls_type = cls
+    metadata.default_config_tmpl = dict(TEMPLATE)
     return cls
 
 
@@ -45,7 +48,10 @@ class CursorCLIProvider(Provider):
     _astrbot_cursor_plugin = True
 
     def __init__(self, provider_config, provider_settings):
-        super().__init__(dict(provider_config), provider_settings)
+        # Dashboard-created models can default to image/audio/tool support.
+        # Declare this adapter's actual capabilities on its own config copy.
+        config = {**provider_config, "modalities": ["text"]}
+        super().__init__(config, provider_settings)
         cfg = runtime.settings()
         self.set_model(provider_config.get("model") or cfg["model"])
         self.transport = SSHTransport(cfg)

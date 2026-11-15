@@ -34,6 +34,8 @@ sudo chown -R 1000:1000 deploy/client
 
 ## 3. 启动 Cursor CLI 容器
 
+CLI 会在镜像构建时安装到容器内，无需安装 Cursor 桌面版或宿主机 CLI。
+
 ```bash
 docker network create --internal astrbot-cursor-link
 cp deploy/model_id.example deploy/model_id
@@ -112,7 +114,7 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 2. 检查 SSH 文件路径，保存并重载插件。
 3. 在模型来源页新增 `cursor_cli`（Cursor CLI），Key 和 API Base 留空。
 4. 获取列表或手动添加同一模型 ID 的聊天模型。
-5. 在目标会话或配置中选择该模型，关闭工具、MCP、图片和音频功能。
+5. 在目标会话或配置中选择该模型。Provider 会声明仅文本能力，AstrBot 据此过滤不支持的输入和工具。
 
 模型列表来自插件配置，不会调用 Cursor。WebUI 的“测试模型”按钮会发送真实请求，可能消耗额度。
 
@@ -128,7 +130,7 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 
 回滚时恢复旧插件和 Runner 镜像，再重载插件。登录卷可继续保留；`docker compose down -v` 会删除命名卷并清除登录。
 
-停用插件前，可先将会话切回其他模型。插件会取消自己的请求，不会自动改变会话绑定或切换到备用模型。
+插件沿用参考 OAuth 插件的模型生命周期：停用插件不主动删除 AstrBot 中已加载的模型实例，因此不等于停止 Cursor 模型。需要停止模型时，应在 AstrBot 模型设置中禁用或删除它；请求取消和实例清理由模型管理器负责。已配置的备用模型保持 AstrBot 原有行为。
 
 ## 故障排查
 

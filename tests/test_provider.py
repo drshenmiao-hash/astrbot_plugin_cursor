@@ -6,7 +6,11 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
+from astrbot.core.provider.capabilities import supports_modality
 
 from cursor_plugin import runtime
 from cursor_plugin.errors import CursorError
@@ -96,6 +100,24 @@ class ProviderMockTests(unittest.IsolatedAsyncioTestCase):
                 await self.provider.text_chat(prompt="MOCK:env", model=model)
             self.assertEqual(caught.exception.code, "model")
 
+    async def test_host_filters_tools_using_text_only_capabilities(self):
+        config = {
+            "id": "test-cursor",
+            "type": "cursor_cli",
+            "model": "mock-plan-model",
+            "modalities": ["text", "image", "audio", "tool_use"],
+        }
+        provider = CursorCLIProvider(config, {})
+        runner = SimpleNamespace(provider=provider, req=SimpleNamespace(func_tool=object()))
+        try:
+            self.assertIsNone(ToolLoopAgentRunner._func_tool_for_provider(runner))
+            self.assertFalse(supports_modality(provider, "image"))
+            self.assertFalse(supports_modality(provider, "audio"))
+            self.assertTrue(supports_modality(provider, "text"))
+            self.assertEqual(config["modalities"], ["text", "image", "audio", "tool_use"])
+        finally:
+            await provider.terminate()
+
     async def test_nontext_requests_are_rejected_before_cli(self):
         for args in (
             {"image_urls": ["file:///etc/passwd"]},
@@ -108,7 +130,7 @@ class ProviderMockTests(unittest.IsolatedAsyncioTestCase):
                 await self.provider.text_chat(prompt="MOCK:env", **args)
             self.assertEqual(caught.exception.code, "unsupported")
 
-    async def test_unload_cancels_running_request(self):
+    async def test_provider_termination_cancels_running_request(self):
         task = asyncio.create_task(self.provider.text_chat(prompt="MOCK:timeout"))
         await asyncio.sleep(0.2)
         await self.provider.terminate()

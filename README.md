@@ -10,7 +10,7 @@
 - 固定使用 Ask 模式，手动指定模型 ID，不自动换模型或重试。
 - CLI 在专用容器中运行，每次调用使用空工作目录和临时 HOME。
 - 通过 stdin 传递正文，过滤子进程环境变量，隐藏原始错误输出。
-- 支持插件重载和请求取消，无需修改 AstrBot 核心或原有 OpenAI OAuth 插件。
+- 按参考 OAuth 插件的方式注册和重载 Provider，由 AstrBot 管理模型实例及备用模型。
 
 目前只支持纯文本。图片、音频、工具调用和工具历史会被拒绝；流式接口一次返回最终回复。
 
@@ -55,6 +55,8 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 
 安装插件不会自动部署 CLI 或登录账号。
 
+无需安装 Cursor 桌面版，也无需在宿主机额外安装 CLI；CLI 随专用 Docker 镜像构建安装。
+
 ## 配置
 
 在插件配置中填写并保存以下参数，然后重载插件。
@@ -75,7 +77,9 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 - 插件配置的 `model_id`。
 - AstrBot 原生模型配置的 `model`。
 
-在 AstrBot 中新增 `cursor_cli`（Cursor CLI）来源，Key 和 API Base 留空，再获取模型列表或手动添加该模型。获取列表不会调用 CLI。选择模型后，关闭对应人格或会话的工具、MCP、图片和音频功能。
+在 AstrBot 中新增 `cursor_cli`（Cursor CLI）来源，Key 和 API Base 留空，再获取模型列表或手动添加该模型。获取列表不会调用 CLI。Provider 向 AstrBot 声明仅支持文本；直接传入非文本内容或工具调用仍会报错。
+
+插件不自行切换 Cursor 模型；AstrBot 中已配置的备用模型仍按原设置工作。
 
 ## 登录与额度
 
@@ -91,14 +95,14 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 - 人格以文本 transcript 传入，不是 Cursor 原生的独立 system 消息。
 - 采样参数和 token 限额未映射到 CLI。
 - Runner 同时处理一个请求，忙时直接返回提示。
-- 超时或连接中断的请求仍可能产生用量，重试前应先查看用量记录。
+- 超时或连接中断不代表远端 CLI 已停止，请先核对状态及用量再决定是否重试。
 
 ## 参考
 
 - [AstrBot 插件文档](https://docs.astrbot.app/use/plugin.html)与[开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)。
-- [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)：Provider 注册和热重载设计参考；本项目独立实现，不依赖该插件。
+- [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)：直接改编其 Provider 注册与热重载代码，保留 AstrBot 对模型实例的管理；不需要安装该插件。来源与许可证见 [NOTICE](NOTICE)。
 - Cursor CLI 官方文档：[Headless](https://cursor.com/docs/cli/headless)、[参数](https://cursor.com/docs/cli/reference/parameters)、[认证](https://cursor.com/docs/cli/reference/authentication)、[输出格式](https://cursor.com/docs/cli/reference/output-format)、[权限](https://cursor.com/docs/cli/reference/permissions)。
 
 ## 许可证
 
-[MIT](LICENSE)
+[AGPL-3.0](LICENSE)。聊天中可通过 `/cursor_source` 查看本版本源码地址。

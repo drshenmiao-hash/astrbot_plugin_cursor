@@ -16,6 +16,8 @@ RUN curl -fLsS --retry 3 "https://downloads.cursor.com/lab/${CURSOR_VERSION}/lin
     && rm /tmp/cursor.tar.gz \
     && chmod -R a+rX /opt/cursor
 COPY cursor_plugin/ /opt/cursor-runner/cursor_plugin/
+COPY LICENSE NOTICE /opt/cursor-runner/
+COPY licenses/ /opt/cursor-runner/licenses/
 COPY runner/entry.py /opt/cursor-runner/entry.py
 COPY runner/admin.py /usr/local/bin/cursor-admin
 COPY runner/start.sh /usr/local/bin/cursor-start

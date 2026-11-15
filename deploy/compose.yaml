@@ -1,7 +1,7 @@
 name: astrbot-cursor
 services:
   cursor-cli:
-    image: astrbot-cursor-cli:0.1.0
+    image: astrbot-cursor-cli:0.1.1
     platform: linux/amd64
     build:
       context: ..
