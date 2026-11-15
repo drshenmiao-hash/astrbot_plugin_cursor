@@ -1,0 +1,21 @@
+test_actual_sent_history_keeps_assistant_think_and_whitespace (tests.test_history_reuse.HistoryReuseTests.test_actual_sent_history_keeps_assistant_think_and_whitespace) ... ok
+test_assistant_boundary_whitespace_stripped (tests.test_history_reuse.HistoryReuseTests.test_assistant_boundary_whitespace_stripped) ... ok
+test_assistant_think_blocks_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_think_blocks_removed) ... ok
+test_assistant_thinking_blocks_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_thinking_blocks_removed) ... ok
+test_assistant_trailing_think_close_removed (tests.test_history_reuse.HistoryReuseTests.test_assistant_trailing_think_close_removed) ... ok
+test_identical_messages_replayed_with_and_without_reply (tests.test_history_reuse.HistoryReuseTests.test_identical_messages_replayed_with_and_without_reply) ... ok
+test_memory_attached_to_current_user_preserves_prior_reminders (tests.test_history_reuse.HistoryReuseTests.test_memory_attached_to_current_user_preserves_prior_reminders) ... ok
+test_replayed_input_with_system_change_defers_update (tests.test_history_reuse.HistoryReuseTests.test_replayed_input_with_system_change_defers_update) ... ok
+test_second_system_none_withdraws_once (tests.test_history_reuse.HistoryReuseTests.test_second_system_none_withdraws_once) ... ok
+test_system_append_sends_only_suffix (tests.test_history_reuse.HistoryReuseTests.test_system_append_sends_only_suffix) ... ok
+test_system_fixed_across_turns (tests.test_history_reuse.HistoryReuseTests.test_system_fixed_across_turns) ... ok
+test_system_memory_changes_every_turn (tests.test_history_reuse.HistoryReuseTests.test_system_memory_changes_every_turn) ... ok
+test_system_only_change_deferred_until_new_user (tests.test_history_reuse.HistoryReuseTests.test_system_only_change_deferred_until_new_user) ... ok
+test_system_timestamp_changes_every_turn (tests.test_history_reuse.HistoryReuseTests.test_system_timestamp_changes_every_turn) ... ok
+test_user_think_tags_and_whitespace_are_not_normalized (tests.test_history_reuse.HistoryReuseTests.test_user_think_tags_and_whitespace_are_not_normalized) ... ok
+test_visible_assistant_edit_still_rebuilds (tests.test_history_reuse.HistoryReuseTests.test_visible_assistant_edit_still_rebuilds) ... ok
+
+----------------------------------------------------------------------
+Ran 16 tests in 1.183s
+
+OK

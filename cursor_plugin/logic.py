@@ -2,6 +2,10 @@
 
 import hashlib
 import json
+import re
+
+_REASONING_BLOCK = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL)
+_TRAILING_REASONING_CLOSE = re.compile(r"</(?:think|thinking)>\s*$")
 
 
 def history_hashes(history):
@@ -49,16 +53,25 @@ def compare_history_hashes(old_hashes, new_hashes, *, tail_count=2):
     }
 
 
-def history_state(history):
-    """Keep system separately; tolerate strip() of assistant replies in history.
+def assistant_match_text(text):
+    """Mirror AstrBot's reasoning-tag cleanup, exclusively for history hashes.
 
-    Only assistant boundary whitespace is canonicalized, and only for matching.
-    User text (including injected reminders) and transmitted messages stay intact.
+    Matches the cleanup in AstrBot 4.29.4's OpenAI completion parser: complete
+    think/thinking blocks, a trailing closing tag, then boundary whitespace.
+    Do not guess away incomplete opening tags or alter visible answer content.
+    """
+    return _TRAILING_REASONING_CLOSE.sub("", _REASONING_BLOCK.sub("", text)).strip()
+
+
+def history_state(history):
+    """Keep system separately; normalize only assistant text used for matching.
+
+    User text, original replies and transmitted messages stay intact.
     """
     systems = [dict(item) for item in history if item.get("role") == "system"]
     dialogue = [item for item in history if item.get("role") != "system"]
     canonical = [
-        {**item, "content": item["content"].strip()}
+        {**item, "content": assistant_match_text(item["content"])}
         if item.get("role") == "assistant" and isinstance(item.get("content"), str)
         else item
         for item in dialogue

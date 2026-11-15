@@ -3,10 +3,10 @@
 ## 历史复用修复（开发分支补丁）
 
 - 根据用户提供的 Lumi 现网观察，system 不再参与对话前缀匹配；system 变更作为一条增量发送，不因此新建会话。
-- assistant 历史匹配兼容 `strip()`；不修改 user 文本或实际传输内容。
+- assistant 历史匹配兼容 `strip()`、完整 think/thinking 块剥离及末尾闭合标签清理；不修改 user 文本、原始回复或实际传输内容。
 - 缓存最近一次成功请求的对话 hash 和结果，兼容原请求重放、已含 assistant 回复的相同历史；无新 user 时不再报 `empty_input` 或调用 CLI。
 - 仅有 system 变化时延迟发送，直到出现新 user；只在模型成功后提交新的 system 状态。
-- 不改 CLI/SSH/隔离/调度基建。按用户最新要求不新增或执行补测，仅做语法、格式检查。
+- 不改 CLI/SSH/隔离/调度基建。初版只做静态检查；后续已补齐并执行 16 项内存回归，覆盖 system 变化、记忆位置、重放、延迟更新和 think 归一化，完整输出见 `docs/HISTORY_REGRESSION_OUTPUT.txt`。
 
 ## 0.2.0（开发中）
 

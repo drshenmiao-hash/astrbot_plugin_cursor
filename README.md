@@ -2,7 +2,7 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 待环境验收。此前版本执行过 23 项纯逻辑检查；最新历史复用补丁按用户要求未补测，仅做静态检查。常驻进程、SSH、本地隔离、真实联通与计费尚未完成环境验收。
+> 0.2.0 待环境验收。历史复用补丁的 16 项内存回归测试已执行通过。常驻 CLI、SSH、本地隔离、真实联通与计费尚未完成环境验收。
 
 基础版本已合入默认分支 `main`。最新历史复用补丁位于 `fix/persistent-cli-provider`，见 [补丁说明](docs/HISTORY_PATCH.md)。
 
@@ -42,7 +42,7 @@
 ## 复用与并发的边界
 
 - 有稳定 `conversation_id` 或 `session_id` 才复用会话；没有稳定标识时，不跨请求猜测会话归属。
-- 前缀 hash 排除全部 `role=system`，完整比较其余对话；仅对 assistant 内容的首尾空白做匹配归一化，兼容回复被 `strip()`。
+- 前缀 hash 排除全部 `role=system`，完整比较其余对话；assistant 比对兼容首尾空白、完整 `<think>` / `<thinking>` 块被剥离和末尾闭合标签清理，不修改实际发送内容或返回的回复。
 - system 变化通过一条增量说明发送；追加内容仅发送后缀，替换或删除会明确说明。system 消失（包括次轮传入 `None`）会撤回先前 system 条目。
 - 重复上次请求，或已有回复的历史没有新 user 条目时，沿用该会话最近一次成功结果，不调用 CLI。没有可用缓存时安全返回空文本。仅有 system 变化时，差异保留到下次新 user 输入再发送。
 - 同会话待执行请求都带 `request_sequence` 时可按序号重排；没有序号时按到达顺序。队列仅有 25 ms 的聚合窗口，不能重排已经开始的请求。
@@ -64,6 +64,9 @@
 ```bash
 # 纯逻辑，无网络和子进程依赖
 python tests/check_logic.py
+
+# 历史复用回归，实际运行 Engine；ACP 对端为内存替身，无子进程或网络
+python -m unittest -v tests.test_history_reuse
 
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock
