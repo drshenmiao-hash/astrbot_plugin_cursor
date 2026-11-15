@@ -1,0 +1,11 @@
+{
+  "transport": "local",
+  "cli_binary": "/opt/cursor/cursor-agent",
+  "cursor_auth_path": "/path/to/dedicated-cursor/.config/cursor/auth.json",
+  "model_id": "REPLACE_WITH_EXPLICIT_PLAN_MODEL",
+  "max_concurrency": 2,
+  "queue_capacity": 64,
+  "queue_timeout_seconds": 120,
+  "timeout_seconds": 120,
+  "context_max_bytes": 262144
+}

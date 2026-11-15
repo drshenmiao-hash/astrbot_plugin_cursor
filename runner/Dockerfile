@@ -9,20 +9,22 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && usermod -p '*' cursor \
     && mkdir -p /opt/cursor /opt/cursor-runner /var/lib/cursor-login /run/cursor-server
 # Download the official distribution, verify the pinned artifact, never execute
-# installer scripts or model requests during the build. v0.1 ships Linux amd64.
+# installer scripts or model requests during the build. This recipe is Linux amd64.
 RUN curl -fLsS --retry 3 "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/x64/agent-cli-package.tar.gz" -o /tmp/cursor.tar.gz \
     && echo "${CURSOR_SHA256}  /tmp/cursor.tar.gz" | sha256sum -c - \
     && tar --strip-components=1 -xzf /tmp/cursor.tar.gz -C /opt/cursor \
     && rm /tmp/cursor.tar.gz \
     && chmod -R a+rX /opt/cursor
+RUN python3 -c 'import hashlib,json,os; from pathlib import Path; p=Path("/opt/cursor"); (p/"receipt.json").write_text(json.dumps({"version":os.environ["CURSOR_VERSION"],"archive_sha256":os.environ["CURSOR_SHA256"],"entry_sha256":hashlib.sha256((p/"index.js").read_bytes()).hexdigest()}))'
 COPY cursor_plugin/ /opt/cursor-runner/cursor_plugin/
 COPY LICENSE NOTICE /opt/cursor-runner/
 COPY licenses/ /opt/cursor-runner/licenses/
 COPY runner/entry.py /opt/cursor-runner/entry.py
 COPY runner/admin.py /usr/local/bin/cursor-admin
+COPY runner/doctor.py /usr/local/bin/cursor-doctor
 COPY runner/start.sh /usr/local/bin/cursor-start
 COPY runner/sshd_config /etc/ssh/cursor_sshd_config
-RUN chmod 755 /usr/local/bin/cursor-admin /usr/local/bin/cursor-start \
+RUN chmod 755 /usr/local/bin/cursor-admin /usr/local/bin/cursor-start /usr/local/bin/cursor-doctor \
     && chown -R root:root /opt/cursor /opt/cursor-runner
 EXPOSE 2222
 ENTRYPOINT ["/usr/local/bin/cursor-start"]

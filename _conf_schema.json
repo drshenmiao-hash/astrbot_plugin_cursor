@@ -35,6 +35,68 @@
     "description": "CLI 超时秒数（1–600）",
     "type": "int",
     "default": 120,
-    "hint": "SSH 总超时比此值多 15 秒。超时不自动重试；请先检查 Cursor 用量。"
+    "hint": "从实际执行开始计时，不包含排队。超时发送 ACP 取消，5 秒内未确认则重置运行时；不自动重试。"
+  },
+  "transport": {
+    "description": "进程连接方式",
+    "type": "string",
+    "default": "auto",
+    "options": [
+      "auto",
+      "local",
+      "ssh"
+    ],
+    "hint": "auto 优先本地官方 CLI + bubblewrap；没有所需组件时使用 SSH。不会降级为无文件隔离执行。"
+  },
+  "cli_binary": {
+    "description": "本地官方 CLI 路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空自动查找 agent / cursor-agent；只支持官方发行包目录结构。"
+  },
+  "cursor_auth_path": {
+    "description": "本地 Cursor 登录文件",
+    "type": "string",
+    "default": "~/.config/cursor/auth.json",
+    "hint": "本地模式使用；只复制此登录文件，不暴露整个 HOME。"
+  },
+  "bubblewrap_binary": {
+    "description": "本地文件隔离程序",
+    "type": "string",
+    "default": "/usr/bin/bwrap"
+  },
+  "max_concurrency": {
+    "description": "同时执行的请求数",
+    "type": "int",
+    "default": 2,
+    "hint": "同一会话始终串行；范围 1–8。"
+  },
+  "queue_capacity": {
+    "description": "等待队列容量",
+    "type": "int",
+    "default": 64,
+    "hint": "队列满时等待空位，达到排队时限才返回明确错误。"
+  },
+  "queue_timeout_seconds": {
+    "description": "排队超时秒数",
+    "type": "int",
+    "default": 120
+  },
+  "context_max_bytes": {
+    "description": "完整上下文 UTF-8 字节上限",
+    "type": "int",
+    "default": 262144,
+    "hint": "范围 1024–16777216。超限报 context_limit，不截断、不丢历史。"
+  },
+  "output_max_bytes": {
+    "description": "单次回复字节上限",
+    "type": "int",
+    "default": 2097152
+  },
+  "max_sessions": {
+    "description": "每个进程的会话数上限",
+    "type": "int",
+    "default": 128,
+    "hint": "达到后等待当前请求结束，再轮换进程并重新同步历史，避免常驻内存无限增长。"
   }
 }

@@ -1,74 +1,83 @@
-# 测试与验收
+# 检查与验收
 
-测试分为离线模拟、部署检查和真实计费三个部分。测试结果应分别记录；离线模拟不代表真实 Cursor 调用或套餐计费通过。
+只将实际执行的项目记为通过。当前已执行纯逻辑检查；其余脚本交给部署者运行。模拟 ACP 不代表官方 CLI、AstrBot 实机联动或套餐计费通过。
 
-## 离线模拟 CLI
+## A. 已执行的纯逻辑
 
-在已安装 AstrBot 依赖的 Python 环境中，从插件根目录执行：
-
-```bash
-python -m unittest discover -s tests -v
-```
-
-Docker 示例，容器名按实际测试实例替换：
+在插件根目录运行，Python 3.10+，无需 AstrBot、网络或 CLI：
 
 ```bash
-docker exec -w /AstrBot/data/plugins/astrbot_plugin_cursor astrbot-test \
-  python -m unittest discover -s tests -v
+python tests/check_logic.py
 ```
 
-`test_provider.py` 和 `test_lifecycle.py` 导入真实 AstrBot API，需要使用 AstrBot 的解释器和依赖。仅运行不依赖 AstrBot 的边界测试：
+脚本直接 import `cursor_plugin.logic`，打印输入、实际输出并断言：
+
+- 七组历史：新增、中间修改、末尾标点、缩短到一条、单条相同、首次与空历史。分别核对长度、完整前缀 hash 和末两条结果；是否复用只由完整前缀一致决定。
+- 三组队列：同会话序号 3/1/2 到达后排为 1/2/3、同会话已执行时阻塞、没有序号时保持到达顺序。
+- 十三组错误文本分类：主机公钥、客户端密钥、隔离、认证、排队、网络、模型、限流、用量、上下文、协议、超时、未知失败。
+
+当前实际结果为 `RESULT: 23 pure-logic checks PASS; network/process/SSH calls: 0`。这证明这些规则函数在给定输入下的结果，不证明实际异步调度或子进程行为。
+
+完整实际输出见 [LOGIC_OUTPUT.txt](LOGIC_OUTPUT.txt)。
+
+## B. 由你运行的单一环境脚本
+
+脚本为 `tests/check_environment.py`。五项依次是 PID 复用、同会话并发、取消后断线重连、每轮发送字节、依赖诊断。
+
+每项打印 `PASS`、`FAIL` 或 `SKIP`，紧随 `RAW` JSON，含实际回复、PID、元数据或异常堆栈。依赖探针保留退出码、标准输出和标准错误；不打印认证帧、登录文件内容或 CLI 原始聊天错误。无法观测实际 CLI PID 时明确 SKIP，不用启动器 PID 假冒。异常或断言失败返回非零；缺依赖、未配置、未授权真实模型调用时 SKIP 并说明缺什么，SKIP 不是通过。
+
+### 模拟 ACP 子进程
 
 ```bash
-python -m unittest tests.test_runner -v
+python tests/check_environment.py --mock
 ```
 
-测试中的 `mock_cli.py`、`mock_ssh.py` 和凭据均为模拟内容，不连接 Cursor。`mock-plan-model` 是测试专用 ID，不能用于实际模型配置。
+使用 `tests/mock_acp.py`，无需 Cursor 登录或网络；模拟登录、模型列表及回复。会创建真正的本地子进程以检查生命周期，不能归入 A 的纯函数检查。此命令尚未由作者运行。
 
-| 测试范围 | 检查内容 |
+### 真实环境
+
+复制 `tests/environment_config.example.json` 到测试实例，填写该实例实际的路径、运行方式及明确套餐内模型 ID。也可导出插件设置为 JSON；文件不放令牌。
+
+先只诊断，不发送提示词：
+
+```bash
+python tests/check_environment.py --config /path/to/plugin-config.json
+```
+
+确认登录和模型后，显式开启真实请求：
+
+```bash
+python tests/check_environment.py --config /path/to/plugin-config.json --allow-model-requests
+```
+
+从与 AstrBot 相同的容器、UID、挂载、网络和 Python 环境执行。不要与正在服务的 Cursor Provider 共享登录锁；使用独立测试实例或暂时禁用该实例的 Cursor 模型。
+
+| 项目 | 脚本检查 |
 | --- | --- |
-| Provider 调用 | 文本请求经模拟 SSH 和 CLI 返回 `LLMResponse` |
-| 人格与历史 | 消息顺序正确、原历史不变、不恢复 Cursor 会话 |
-| 调用参数 | Ask、明确模型、JSON 输出，无 force 或会话恢复参数 |
-| 进程隔离 | 空工作目录、环境变量过滤、权限配置 |
-| 错误处理 | 超时、未登录、非零退出、格式错误和输出超限 |
-| 输入限制 | 拒绝 Auto、不同模型、非文本内容及过大上下文 |
-| 生命周期 | Provider 终止、进程组清理、保留实例的重载和其他实例保留 |
+| PID | 连续两轮的实际 CLI PID 一致；本地通过 `/proc` 查找，SSH 由固定运行器报告 |
+| 同会话并发 | 同批提交序号 3、1、2，检查完成顺序 1、2、3，失败请求不会被当成回复 |
+| 取消后重连 | 取消活动提示词、等待任务清理，再主动断开连接，确认新 PID 能返回回复；太快完成而未覆盖取消时 SKIP |
+| 字节 | 两轮打印完整输入、增量文本、实际 ACP 提示帧和输出字节；第二轮等于预期增量，且 `reused=true` |
+| 诊断 | 本地 CLI/隔离/登录；SSH 密钥/主机/版本/登录卷/入口哈希分别报告 |
 
-生命周期测试使用 Manager 替身，不覆盖真实 WebUI 或 OpenAI OAuth 插件的完整运行流程。
+同会话重排只覆盖尚未执行、在 25 ms 聚合窗口内且都带序号的请求；不保证 QQ 消息自身的时间顺序。脚本直接调用 Engine，并不覆盖 AstrBot WebUI、QQ 平台、消息事件上下文或备用模型切换。
 
-## 部署检查
+## C. 框架与计费的独立验收
 
-在独立测试编排中检查：
+以下必须在你实际的 AstrBot 和 Cursor 账号中核对：
 
-- [ ] Runner 能构建和启动，未使用特权模式或 Docker socket。
-- [ ] 挂载仅包含专用密钥、模型文件和登录卷，没有 AstrBot 或其他服务目录。
-- [ ] CLI 以 UID 10001 运行，工作目录和 HOME 按请求创建，未继承其他服务环境变量。
-- [ ] AstrBot 可以添加 `cursor_cli` 来源，模型列表只包含配置的 ID。
-- [ ] 冷启动和连续重载不产生重复注册或重复实例，选中的模型保持正确。
-- [ ] 停用插件不删除已加载的模型；在模型设置中禁用模型可以清理其请求；原 OpenAI OAuth 插件仍可正常使用。
-- [ ] Cursor 仅声明文本能力，普通文本请求不会附带不支持的工具；已配置的备用模型按 AstrBot 原规则接管。
-- [ ] QQ 会话的人格及多轮历史正确，不同会话不会复用 CLI 历史。
-- [ ] 同时发起请求时，后续请求收到忙提示。
-- [ ] 固定版本 CLI 的 Ask 模式和拒绝权限按预期生效。
-- [ ] 插件及 Runner 日志中没有聊天正文、登录 URL 或凭据。
+- 原生来源注册、冷启动、连续重载、模型选择和终止清理；原 OpenAI OAuth 插件仍可使用，原有备用模型能按框架规则接管。
+- 两个 QQ 会话隔离、人格与历史正确；观察实际事件环境能显示排队及超时报错；没有稳定会话标识时应记录 `no_stable_session_key`。
+- Ask 固定、客户端文件/终端能力关闭；通过测试环境检查 CLI 看不到 AstrBot 数据与其他服务密钥。A 不覆盖隔离安全边界。
+- 日志只有元数据，无聊天正文或凭据。环境脚本的 RAW 回复只用于管理员验收，不应粘贴到公开日志。
 
-## 真实联通与套餐计费
+真实计费不能从发送字节或成功回复推断。测试前在 [Cursor 用量页](https://cursor.com/dashboard/usage) 记录时间、套餐用量与额外收费；测试后等待更新，按时间和明确模型核对是否扣套餐。取消、失败和超时也可能产生用量，脚本不会自动重试。CLI 会话复用减少重复传输，但没有证明历史 token 免费、缓存必定命中或费用减半。
 
-1. 完成 Cursor 浏览器登录，使用 `cursor-admin models` 查看模型 ID，并确认选定模型的套餐范围。
-2. 将同一个 ID 写入 Runner、插件和 AstrBot 原生模型配置。
-3. 在 [Cursor 控制台](https://cursor.com/dashboard) 记录请求前的时间、套餐用量和按量收费记录。
-4. 发送一条简短文本，再发送一条依赖前文的追问，检查回复、人格和历史。
-5. 等待用量页面更新，按时间和模型对照记录，确认消耗的是套餐额度，并检查有无额外收费。
-
-登录成功或收到回复都不能单独证明计费归属。页面无法区分时，应记录为“无法确认”。失败或超时的请求也可能产生用量，重试前需核对记录。
-
-| 记录项 | 结果 |
+| 记录项 | 待填结果 |
 | --- | --- |
-| 插件提交、AstrBot 版本、CLI 版本 | |
-| Cursor 套餐、明确模型 ID | |
-| 模拟测试和部署检查 | |
-| 请求时间、请求前后套餐用量 | |
-| 请求前后额外收费记录 | |
-| 文本回复、人格、多轮历史 | |
-| 套餐计费结论 | |
+| 插件提交 / AstrBot / CLI 版本 | |
+| A 输出 / B 每项 PASS、FAIL、SKIP 及 RAW | |
+| 真实 QQ、Provider 重载、备用模型 | |
+| 明确模型 / 套餐 / 请求时间 | |
+| 用量页前后套餐扣量 / 额外收费 | |
+| 最终结论；无法区分时写“无法确认” | |

@@ -1,1 +1,2 @@
-# No additional Python packages. Requires the OpenSSH client in AstrBot's image.
+# No additional Python packages. Local mode requires bubblewrap; SSH mode
+# requires OpenSSH. Cursor CLI runs with a filtered environment and isolated FS.

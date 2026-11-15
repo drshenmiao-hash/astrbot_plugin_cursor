@@ -1,0 +1,24 @@
+PASS history/append: old=['A', 'B', 'C'] new=['A', 'B', 'C', 'D'] => delta=['D']; reuse=True; length=grown; hash=match; tail=match
+PASS history/middle-only-change: old=['A', 'B', 'C', 'D'] new=['A', 'B!', 'C', 'D'] => delta=['A', 'B!', 'C', 'D']; reuse=False; length=same; hash=changed; tail=match
+PASS history/tail-punctuation: old=['你好。', '回答。'] new=['你好。', '回答！'] => delta=['你好。', '回答！']; reuse=False; length=same; hash=changed; tail=changed
+PASS history/only-one-remains: old=['A', 'B', 'C'] new=['C'] => delta=['C']; reuse=False; length=shrunk; hash=changed; tail=insufficient
+PASS history/identical-one: old=['A'] new=['A'] => delta=[]; reuse=True; length=same; hash=match; tail=match
+PASS history/new-history: old=[] new=['first'] => delta=['first']; reuse=False; length=grown; hash=match; tail=empty
+PASS history/empty-history: old=[] new=[] => delta=[]; reuse=False; length=same; hash=match; tail=empty
+PASS queue/out-of-order: arrival=['a3', 'a1', 'a2'] => execution=['a1', 'a2', 'a3']
+PASS queue/session-active: active=A => executable=['b1']
+PASS queue/no-sequence: execution=[first-arrived, second-arrived]; chronology cannot be inferred
+PASS error: raw='Host key verification failed.' stage=ssh => ssh_host_key_mismatch
+PASS error: raw='Permission denied (publickey).' stage=ssh => ssh_auth_denied
+PASS error: raw='bwrap: Creating new namespace failed: Operation not permitted' stage=startup => sandbox_unavailable
+PASS error: raw='Authentication required. PRIVATE_TOKEN_SENTINEL' stage=request => not_logged_in
+PASS error: raw='Queue wait timed out' stage=request => queue_timeout
+PASS error: raw='connect to host: Connection timed out' stage=ssh => ssh_unreachable
+PASS error: raw='Model example-model is not available' stage=request => model_unavailable
+PASS error: raw='429 rate limit exceeded' stage=request => rate_limited
+PASS error: raw='Quota exceeded' stage=request => quota_exhausted
+PASS error: raw='Context too long' stage=request => context_limit
+PASS error: raw='Invalid JSON response' stage=request => protocol
+PASS error: raw='request timed out' stage=request => timeout
+PASS error: raw='unrecognized failure' stage=request => cli_failed
+RESULT: 23 pure-logic checks PASS; network/process/SSH calls: 0

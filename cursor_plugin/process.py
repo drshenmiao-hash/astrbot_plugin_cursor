@@ -63,5 +63,13 @@ async def run_process(argv, payload, *, cwd, env, timeout, output_limit):
         for job in jobs:
             if not job.done():
                 job.cancel()
+        for stream in (proc.stdout, proc.stderr):
+            transport = getattr(stream, "_transport", None)
+            if transport is not None:
+                transport.close()
         await asyncio.gather(*jobs, return_exceptions=True)
-        await proc.wait()
+        try:
+            await asyncio.wait_for(proc.wait(), 2)
+        except asyncio.TimeoutError:
+            # A broken transport must not make diagnostics hang indefinitely.
+            pass

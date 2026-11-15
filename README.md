@@ -1,108 +1,82 @@
 # astrbot_plugin_cursor
 
-在 AstrBot 中使用官方 Cursor CLI 进行纯文本聊天。人格和多轮历史由 AstrBot 管理，插件将文本上下文交给 Cursor，再把回复返回到 QQ 等消息平台。
+使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 预览版本：已完成静态检查，模拟测试、容器运行、真实联通和套餐计费尚未验收。
+> 0.2.0 开发分支。纯逻辑检查已执行；常驻进程、SSH、本地隔离、真实联通与计费尚未完成环境验收。
 
-## 功能
+本次代码在 [`fix/persistent-cli-provider`](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/fix/persistent-cli-provider)。默认分支仍是旧版；测试本次修改请下载该分支或使用本次提交的源码包。
 
-- 注册原生 `cursor_cli` Provider，可在 AstrBot 中添加和选择模型。
-- 固定使用 Ask 模式，手动指定模型 ID，不自动换模型或重试。
-- CLI 在专用容器中运行，每次调用使用空工作目录和临时 HOME。
-- 通过 stdin 传递正文，过滤子进程环境变量，隐藏原始错误输出。
-- 按参考 OAuth 插件的方式注册和重载 Provider，由 AstrBot 管理模型实例及备用模型。
+## 本次修改
 
-目前只支持纯文本。图片、音频、工具调用和工具历史会被拒绝；流式接口一次返回最终回复。
+- 使用官方 `agent acp` 常驻进程，通过 JSON-RPC 维护会话，固定 Ask 和明确模型 ID。
+- 历史连续时只发新增消息。完整前缀 hash 变化、历史压缩、人格变化或请求取消后重建会话。
+- 使用等待队列和并发上限；排队超过 3 秒可回复排队提示，达到时限明确报错。
+- 记录字节、耗时、排队和复用状态；不记录聊天正文、令牌或原始认证错误。
+- 优先在 AstrBot 所在环境本地隔离运行；可选 SSH 专用运行器。
 
-## 运行方式
-
-```text
-QQ → AstrBot → Cursor Provider → SSH → 专用容器中的官方 Cursor CLI
-```
-
-SSH 仅用于向固定运行器传递请求，不提供交互式 Shell 或端口转发。项目没有 OpenAI 兼容 HTTP 桥接，也不需要向 AstrBot 挂载 Docker socket。
-
-CLI 命令固定为：
-
-```bash
-cursor-agent --print --mode ask --model MODEL_ID --output-format json --trust
-```
-
-`--trust` 用于本次创建的空目录。插件不传 `--force`、`--yolo` 或会话恢复参数，并生成拒绝文件、Shell、WebFetch 和 MCP 操作的权限配置。容器只挂载专用登录卷、SSH 密钥目录和模型配置，不挂载 AstrBot 数据或其他服务目录。
-
-## 环境要求
-
-| 组件 | 要求 |
-| --- | --- |
-| AstrBot | 接口依据 4.29.4，声明版本范围为 `>=4.29.4,<5` |
-| 部署环境 | Ubuntu、Docker Compose；提供 1Panel 操作说明 |
-| CPU 架构 | 当前容器配方为 Linux amd64 |
-| Cursor CLI | 固定版本 `2026.11.13-eacade1`，构建时核对 SHA-256 |
-| AstrBot 容器 | 需要 OpenSSH 客户端 |
-
-## 安装
-
-完整步骤见 [安装与升级指南](docs/INSTALL.md)。部署分为两部分：
-
-1. 构建专用 Cursor CLI 容器，生成专用 SSH 密钥，并完成 Cursor 登录。
-2. 在 AstrBot 安装本插件，配置连接参数，再添加 `cursor_cli` 模型来源。
-
-AstrBot 插件页的仓库地址：
-
-```text
-https://github.com/drshenmiao-hash/astrbot_plugin_cursor
-```
-
-安装插件不会自动部署 CLI 或登录账号。
-
-无需安装 Cursor 桌面版，也无需在宿主机额外安装 CLI；CLI 随专用 Docker 镜像构建安装。
+完整清单见 [CHANGELOG](CHANGELOG.md)，部署见 [安装指南](docs/INSTALL.md)。
 
 ## 配置
 
-在插件配置中填写并保存以下参数，然后重载插件。
-
-| 参数 | 默认值 | 说明 |
+| 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `model_id` | 空 | 明确的 Cursor 模型 ID，不接受 `auto` 或 `default` |
-| `ssh_host` | `cursor-cli` | 专用容器的内部主机名 |
-| `ssh_port` | `2222` | 内部 SSH 端口 |
-| `identity_file` | `/run/cursor-client/id_ed25519` | 专用客户端私钥的容器内路径 |
-| `known_hosts_file` | `/run/cursor-client/known_hosts` | 固定主机公钥的容器内路径 |
-| `ssh_binary` | `/usr/bin/ssh` | OpenSSH 客户端路径 |
-| `timeout_seconds` | `120` | CLI 超时，范围为 1–600 秒 |
+| `model_id` | 空 | 必须填写明确、套餐范围已确认的模型 ID；原生模型使用同一个 ID |
+| `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
+| `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
+| `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
+| `bubblewrap_binary` | `/usr/bin/bwrap` | 本地文件隔离程序 |
+| `max_concurrency` | `2` | 同时执行上限 1–8，同一会话始终串行 |
+| `queue_capacity` | `64` | 等待队列容量；满时等待空位，而非立即丢弃 |
+| `queue_timeout_seconds` | `120` | 入队、同会话等待和启动等待的总预算 |
+| `timeout_seconds` | `120` | 开始执行后的超时；发送 ACP 取消，5 秒未确认则重置运行时 |
+| `context_max_bytes` | `262144` | 完整规范化上下文的 UTF-8 字节上限；超限报错，不截断 |
+| `output_max_bytes` | `2097152` | 回复字节上限 |
+| `max_sessions` | `128` | 达到会话数量上限后，待运行中的请求结束再轮换进程 |
+| `ssh_host` / `ssh_port` | `cursor-cli` / `2222` | 仅用于 ssh 路径 |
+| `identity_file` | `/run/cursor-client/id_ed25519` | 专用客户端私钥 |
+| `known_hosts_file` | `/run/cursor-client/known_hosts` | 固定主机公钥 |
+| `ssh_binary` | `/usr/bin/ssh` | OpenSSH 客户端 |
 
-以下三处的模型 ID 必须一致：
+在 AstrBot 添加 `cursor_cli` 来源，Key、API Base 留空，再添加与 `model_id` 相同的原生聊天模型。已有 OpenAI OAuth 配置和备用模型设置保持原样。
 
-- Runner 的 `deploy/model_id` 文件。
-- 插件配置的 `model_id`。
-- AstrBot 原生模型配置的 `model`。
+## 复用与并发的边界
 
-在 AstrBot 中新增 `cursor_cli`（Cursor CLI）来源，Key 和 API Base 留空，再获取模型列表或手动添加该模型。获取列表不会调用 CLI。Provider 向 AstrBot 声明仅支持文本；直接传入非文本内容或工具调用仍会报错。
+- 有稳定 `conversation_id` 或 `session_id` 才复用会话；没有稳定标识时，不跨请求猜测会话归属。
+- 比较整个历史前缀的 hash。长度和末几条只用于诊断，不能代替完整比较。
+- 同会话待执行请求都带 `request_sequence` 时可按序号重排；没有序号时按到达顺序。队列仅有 25 ms 的聚合窗口，不能重排已经开始的请求。
+- Cursor ACP 的模型设置会影响共享运行时，因此此版本固定一个配置模型，不在并发请求间切换模型。
+- 常驻不是永不重启：连接退出、取消未确认、达到会话数上限和模型实例清理时会轮换。轮换后的第一次请求会重新发送完整历史。
 
-插件不自行切换 Cursor 模型；AstrBot 中已配置的备用模型仍按原设置工作。
+## 能力与费用
 
-## 登录与额度
+当前适配器声明文本能力。直接传入图片、音频或工具时抛出 `UnsupportedFeatureError`，有稳定的 `code` 和 `feature`，上层可以据此降级。此版本尚未将 AstrBot 工具注册到 Cursor，不能输出伪造的 `tool_calls`。
 
-使用专用容器内的 `cursor-admin login` 完成浏览器登录。插件只接受浏览器登录凭据，不使用 API Key。
+`input_bytes` 是完整规范化历史，`sent_input_bytes` 是本次发送的文本，`wire_bytes` 是 ACP JSON 帧大小，不含 SSH/TLS 开销。它们都不是 token 或账单金额。会话复用减少重复传输和重复入库，但不能保证历史 token 不再计费或额度下降一半。
 
-模型可用不等于计入套餐额度。首次使用应选择已确认属于套餐范围的明确模型，并在 [Cursor 控制台](https://cursor.com/dashboard) 对照请求前后的用量与收费记录。插件无法决定 Cursor 的账单分类。
+真实模型可用性、缓存和套餐扣费应在 [Cursor 用量页](https://cursor.com/dashboard/usage) 独立核对。
 
-测试命令和检查步骤见 [测试与验收指南](docs/ACCEPTANCE.md)。模拟 CLI 不连接 Cursor，不能验证真实登录或计费。
+## 检查命令
 
-## 使用限制
+```bash
+# 纯逻辑，无网络和子进程依赖
+python tests/check_logic.py
 
-- 文本上下文上限为 256 KiB，超过后需在 AstrBot 压缩或重置会话。
-- 人格以文本 transcript 传入，不是 Cursor 原生的独立 system 消息。
-- 采样参数和 token 限额未映射到 CLI。
-- Runner 同时处理一个请求，忙时直接返回提示。
-- 超时或连接中断不代表远端 CLI 已停止，请先核对状态及用量再决定是否重试。
+# 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
+python tests/check_environment.py --mock
 
-## 参考
+# 真实环境，会发起模型请求并可能计费
+python tests/check_environment.py --config /path/to/plugin-config.json --allow-model-requests
 
-- [AstrBot 插件文档](https://docs.astrbot.app/use/plugin.html)与[开发指南](https://docs.astrbot.app/dev/star/plugin-new.html)。
-- [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)：直接改编其 Provider 注册与热重载代码，保留 AstrBot 对模型实例的管理；不需要安装该插件。来源与许可证见 [NOTICE](NOTICE)。
-- Cursor CLI 官方文档：[Headless](https://cursor.com/docs/cli/headless)、[参数](https://cursor.com/docs/cli/reference/parameters)、[认证](https://cursor.com/docs/cli/reference/authentication)、[输出格式](https://cursor.com/docs/cli/reference/output-format)、[权限](https://cursor.com/docs/cli/reference/permissions)。
+# 仅诊断依赖，不发送模型提示词
+python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
+```
 
-## 许可证
+机器人管理员可运行 `/cursor_doctor`。每项环境检查打印 PASS、FAIL 或 SKIP，并带 RAW 结果或异常堆栈；不会把认证报文或密钥打印出来。详细说明见 [测试指南](docs/ACCEPTANCE.md)。
 
-[AGPL-3.0](LICENSE)。聊天中可通过 `/cursor_source` 查看本版本源码地址。
+## 环境与来源
+
+接口目标为 AstrBot 4.29.4；Python 3.10+。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离；容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
+
+Provider 注册和重载改编自 [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)，来源见 [NOTICE](NOTICE)。使用官方 [Cursor ACP](https://cursor.com/docs/cli/acp) 协议；不修改 AstrBot 核心，不搭建 OpenAI 兼容 HTTP 桥接。
+
+[AGPL-3.0](LICENSE)。`/cursor_source` 提供本版本源码地址。

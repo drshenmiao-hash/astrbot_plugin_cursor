@@ -1,0 +1,15 @@
+# Build a new testing image; never install in the live AstrBot container.
+ARG ASTRBOT_IMAGE
+FROM ${ASTRBOT_IMAGE}
+USER root
+ARG CURSOR_VERSION=2026.11.13-eacade1
+ARG CURSOR_SHA256=c02e4321f20d691ee03af94d29948dc3a81c6c34e7328da7bb1afade4c75812f
+RUN apt-get update && apt-get install -y --no-install-recommends bubblewrap curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/cursor \
+    && curl -fLsS --retry 3 "https://downloads.cursor.com/lab/${CURSOR_VERSION}/linux/x64/agent-cli-package.tar.gz" -o /tmp/cursor.tar.gz \
+    && echo "${CURSOR_SHA256}  /tmp/cursor.tar.gz" | sha256sum -c - \
+    && tar --strip-components=1 -xzf /tmp/cursor.tar.gz -C /opt/cursor \
+    && rm /tmp/cursor.tar.gz
+# Restore the original USER here if the base image uses a non-root user.
+# Local mode also requires working unprivileged namespaces; diagnose before use.

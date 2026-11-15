@@ -3,15 +3,19 @@
 """A native AstrBot chat provider backed exclusively by official Cursor CLI."""
 
 import asyncio
+import hashlib
+import secrets
 
+from astrbot.api.event import MessageChain
 from astrbot.api.provider import LLMResponse, Provider
 from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
 
 from . import runtime
-from .errors import CursorError
+from .errors import CursorError, UnsupportedFeatureError
 from .protocol import explicit_model
-from .transcript import build_transcript
-from .transport import SSHTransport
+from .transcript import normalize_messages
+
+_SESSION_SALT = secrets.token_bytes(32)
 
 TEMPLATE = {
     "id": "cursor-cli",
@@ -54,7 +58,8 @@ class CursorCLIProvider(Provider):
         super().__init__(config, provider_settings)
         cfg = runtime.settings()
         self.set_model(provider_config.get("model") or cfg["model"])
-        self.transport = SSHTransport(cfg)
+        self.engine = runtime.acquire_engine()
+        self.settings = cfg
         self._pending = set()
         self._closed = False
 
@@ -102,6 +107,9 @@ class CursorCLIProvider(Provider):
                 model=model,
                 extra_user_content_parts=extra_user_content_parts,
                 tool_choice=tool_choice,
+                session_id=session_id,
+                conversation_id=kwargs.get("conversation_id"),
+                request_sequence=kwargs.get("request_sequence"),
             )
         except asyncio.CancelledError:
             raise
@@ -124,6 +132,9 @@ class CursorCLIProvider(Provider):
         model,
         extra_user_content_parts,
         tool_choice,
+        session_id,
+        conversation_id,
+        request_sequence,
     ):
         if self._closed:
             raise CursorError("closed")
@@ -132,13 +143,47 @@ class CursorCLIProvider(Provider):
             if callable(getattr(func_tool, "empty", None))
             else bool(func_tool)
         )
-        if image_urls or audio_urls or has_tools or tool_calls_result or tool_choice == "required":
-            raise CursorError("unsupported")
+        if image_urls:
+            raise UnsupportedFeatureError("image")
+        if audio_urls:
+            raise UnsupportedFeatureError("audio")
+        if has_tools or tool_calls_result or tool_choice == "required":
+            raise UnsupportedFeatureError("tool_calls")
         chosen = explicit_model(model if model is not None else self.get_model())
-        if chosen != self.transport.settings["model"]:
+        if chosen != self.settings["model"]:
             raise CursorError("model")
-        transcript = build_transcript(prompt, contexts, system_prompt, extra_user_content_parts)
-        task = asyncio.create_task(self.transport.complete(chosen, transcript))
+        messages = normalize_messages(
+            prompt,
+            contexts,
+            system_prompt,
+            extra_user_content_parts,
+            max_bytes=self.settings["context_max_bytes"],
+        )
+        event = None
+        try:
+            from astrbot.core.platform.astr_message_event import current_message_event
+
+            event = current_message_event.get()
+        except (ImportError, LookupError):
+            pass
+        origin = getattr(event, "unified_msg_origin", "") if event is not None else ""
+        stable = conversation_id or session_id
+        scope = None
+        if isinstance(stable, str) and stable:
+            raw = f"{self.provider_config.get('id', '')}\0{origin}\0{stable}"
+            scope = hashlib.blake2s(raw.encode(), key=_SESSION_SALT, digest_size=16).hexdigest()
+
+        async def on_queued(depth):
+            if event is not None:
+                await event.send(
+                    MessageChain().message(
+                        f"Cursor 请求正在排队（等待中约 {depth} 条），超时会明确回复。"
+                    )
+                )
+
+        task = asyncio.create_task(
+            self.engine.submit(messages, scope, on_queued=on_queued, sequence=request_sequence)
+        )
         self._pending.add(task)
         try:
             text = await task
@@ -151,8 +196,11 @@ class CursorCLIProvider(Provider):
         yield await self.text_chat(*args, **kwargs)
 
     async def terminate(self):
+        if self._closed:
+            return
         self._closed = True
         tasks = list(self._pending)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await runtime.release_engine(self.engine)

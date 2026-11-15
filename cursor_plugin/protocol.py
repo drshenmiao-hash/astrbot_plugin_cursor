@@ -16,7 +16,7 @@ def explicit_model(value):
     if (
         not isinstance(value, str)
         or not MODEL_PATTERN.fullmatch(value)
-        or value.lower() in {"auto", "default"}
+        or value.lower() in {"auto", "auto-smart", "default"}
     ):
         raise CursorError("model")
     return value
