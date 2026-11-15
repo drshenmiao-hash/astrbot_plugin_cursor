@@ -269,7 +269,7 @@ class Engine:
         if not job.scope:
             job.reset_reason = "no_stable_session_key"
         session_id = cached["session_id"] if cached else await client.new_session(self.cfg["model"])
-        text = render_messages(delta, incremental=bool(cached))
+        text = render_messages(delta, incremental=bool(cached), clock_fields=plan["clock_fields"])
         job.sent_bytes = len(text.encode())
         stats = {}
         turn = asyncio.create_task(client.prompt(session_id, text, stats=stats))

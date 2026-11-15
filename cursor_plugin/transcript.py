@@ -66,7 +66,7 @@ def normalize_messages(
     return messages
 
 
-def render_messages(messages, *, incremental=False):
+def render_messages(messages, *, incremental=False, clock_fields=None):
     if incremental:
         header = "Continue the conversation with these new transcript entries. Output only the assistant reply.\n\n"
     else:
@@ -76,6 +76,13 @@ def render_messages(messages, *, incremental=False):
             "message. Continue the conversation and output only the assistant reply. "
             "Do not inspect files, run commands, browse, use tools or manage a Cursor "
             "session. System/developer entries describe the chat persona.\n\n"
+        )
+    if incremental and clock_fields:
+        header = (
+            header.rstrip("\n")
+            + "\nCurrent clock fields for this request (supersede earlier clock values only): "
+            + encode(clock_fields).decode("utf-8")
+            + "\n\n"
         )
     return header + encode(messages).decode("utf-8")
 

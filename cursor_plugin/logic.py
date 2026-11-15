@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 
+from .system_clock import current_clock_fields, raw_append_suffix, semantic_systems
+
 _REASONING_BLOCK = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL)
 _TRAILING_REASONING_CLOSE = re.compile(r"</(?:think|thinking)>\s*$")
 
@@ -81,20 +83,28 @@ def history_state(history):
 
 def system_delta(old_systems, new_systems):
     """One transcript entry containing changes to the last applied system state."""
+    old_views, new_views = semantic_systems(old_systems), semantic_systems(new_systems)
     operations = [
         {"op": "remove", "index": index}
-        for index in range(len(old_systems) - 1, len(new_systems) - 1, -1)
+        for index in range(len(old_views) - 1, len(new_views) - 1, -1)
     ]
-    for index, new in enumerate(new_systems):
-        content = new.get("content", "")
-        if index >= len(old_systems):
+    for index, new in enumerate(new_views):
+        content = new["raw"]
+        if index >= len(old_views):
             operations.append({"op": "add", "index": index, "content": content})
             continue
-        old = old_systems[index].get("content", "")
-        if content == old:
+        old = old_views[index]["text"]
+        if new["text"] == old:
             continue
-        if isinstance(old, str) and isinstance(content, str) and old and content.startswith(old):
-            operations.append({"op": "append", "index": index, "content": content[len(old) :]})
+        if (
+            isinstance(old, str)
+            and isinstance(new["text"], str)
+            and old
+            and new["text"].startswith(old)
+        ):
+            operations.append(
+                {"op": "append", "index": index, "content": raw_append_suffix(new, len(old))}
+            )
         else:
             operations.append({"op": "replace", "index": index, "content": content})
     if not operations:
@@ -103,7 +113,8 @@ def system_delta(old_systems, new_systems):
         "role": "system",
         "content": (
             "Update the previous system entries of this transcript before answering. "
-            "Indices are zero-based among system entries. Apply these operations in order: "
+            "Indices are zero-based among system entries with non-clock instructions; "
+            "clock-only entries are updated through the current clock fields. Apply these operations in order: "
             "append extends an entry; replace supersedes its previous content; "
             "add introduces an entry; remove withdraws it. Unchanged entries remain in force.\n"
             + json.dumps(operations, ensure_ascii=False, separators=(",", ":"))
@@ -132,6 +143,7 @@ def reconcile_history(previous, new_history, *, last_request_hashes=None, tail_c
         "delta": delta,
         "system_changed": update is not None,
         "has_new_user_input": any(item.get("role") == "user" for item in dialogue_delta),
+        "clock_fields": current_clock_fields(state["systems"]),
     }
 
 

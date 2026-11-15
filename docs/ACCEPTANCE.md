@@ -1,5 +1,7 @@
 # 检查与验收
 
+最新组合已实际运行时钟、本地统计、模型解析、注册和历史复用共 79 项，命令及完整输出见 [SYSTEM_CLOCK.md](SYSTEM_CLOCK.md)。使用模拟 ACP 和临时本地数据，不代表真实 Cursor 联通或官方计费。
+
 只将实际执行的项目记为通过。历史复用补丁已补齐并执行 16 项内存回归测试，见 [补丁说明和输出](HISTORY_PATCH.md)。下面的纯逻辑脚本也重新执行通过。环境脚本交给部署者运行。内存替身和模拟 ACP 都不代表官方 CLI、AstrBot 实机联动或套餐计费通过。
 
 自动注册补丁另新增 15 项回归，和上述 16 项合跑共 31 项通过。命令为 `python -m unittest -v tests.test_registration tests.test_history_reuse`，完整输出见 [REGISTRATION_TEST_OUTPUT.txt](REGISTRATION_TEST_OUTPUT.txt)，保护范围及测试替身边界见 [REGISTRATION.md](REGISTRATION.md)。

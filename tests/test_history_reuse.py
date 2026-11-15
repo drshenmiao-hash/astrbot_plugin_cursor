@@ -113,7 +113,9 @@ class HistoryReuseTests(unittest.IsolatedAsyncioTestCase):
             user = f"第 {index + 1} 问"
             messages, reply = await self.turn(system, user, history)
             if index:
-                self.assert_delta(user, [{"op": "replace", "index": 0, "content": system}])
+                self.assert_delta(user)
+                self.assertIn(f"2026-11-15 12:00:0{index}", self.peer.prompts[-1]["text"])
+                self.assertNotIn("你是 Lumi。", self.peer.prompts[-1]["text"])
             history = dialogue_after(messages, reply)
         self.assertEqual(len(self.peer.prompts), 3)
 
