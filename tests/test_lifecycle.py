@@ -5,6 +5,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from astrbot.core.provider.register import provider_cls_map, provider_registry
 
@@ -70,6 +71,13 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             astrbot_config_mgr=SimpleNamespace(default_conf=self.config),
         )
         self.plugin = main.CursorCLIPlugin(self.context, {"model_id": "mock-plan-model"})
+        catalog = patch.object(
+            main.runtime,
+            "_fetch_available_models",
+            new=AsyncMock(return_value=[{"modelId": "mock-plan-model", "name": "Mock Plan"}]),
+        )
+        catalog.start()
+        self.addCleanup(catalog.stop)
 
     async def asyncTearDown(self):
         for pid, instance in list(self.manager.inst_map.items()):

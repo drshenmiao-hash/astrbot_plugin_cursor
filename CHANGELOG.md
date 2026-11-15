@@ -1,5 +1,13 @@
 # 变更记录
 
+## ACP 模型 ID 解析（当前分支补丁）
+
+- 启动/重载/显式校验时通过 ACP `session/new` 拉取一次 availableModels；最终以 modelId 为准，不用管理端 models 名单代替。
+- 先精确匹配 modelId，再唯一匹配展示名、`cursor-<modelId>` 或明确别名 `cursor-grok-4.6-high → grok-4.6`；不任意剥离后缀，有歧义则报 model_ambiguous。
+- 不存在时报 model_unavailable，错误和日志均包含可用 modelId；禁止 auto、空、default，包括通过展示名间接选择 auto。
+- ACP 选择参数和新建原生模型的 id/model 都使用解析后的 modelId；已有别名复用不改名，旧管理端 model 字段可原位纠正；默认/备用及其他提供商配置不变。
+- 新增 24 项模型解析回归，和 15 项注册、16 项历史复用合跑共 55 项通过，使用模拟 ACP 列表，不连接真实 Cursor。
+
 ## 自动注册来源与模型（开发分支补丁）
 
 - 沿用 OpenAI OAuth 插件的来源工厂、配置快照/保存/回滚、管理器同步和重载保留选择流程；仅写入 Cursor 自己的来源和模型。

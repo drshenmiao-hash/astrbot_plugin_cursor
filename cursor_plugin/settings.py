@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 
 from .errors import CursorError
-from .protocol import explicit_model
 
 
 def settings_from(config):
@@ -23,8 +22,9 @@ def settings_from(config):
             # Install the source, but let initialize() report that no explicit
             # model was selected. Never substitute a model for these values.
             options["model"] = ""
-        if options["model"]:
-            explicit_model(options["model"])
+        if len(options["model"]) > 256 or any(ord(c) < 32 for c in options["model"]):
+            raise ValueError
+        options["requested_model"] = options["model"]
         for name, default, low, high in (
             ("ssh_port", 2222, 1, 65535),
             ("timeout_seconds", 120, 1, 1800),

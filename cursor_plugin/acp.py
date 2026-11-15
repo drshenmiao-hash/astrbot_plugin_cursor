@@ -2,10 +2,14 @@
 
 import asyncio
 import json
+import logging
 import time
 
 from .errors import CursorError
 from .logic import classify_error
+from .models import ModelResolutionError, catalog_ids, resolve_model
+
+logger = logging.getLogger("astrbot")
 
 
 class ACPClient:
@@ -96,16 +100,32 @@ class ACPClient:
         except asyncio.TimeoutError:
             raise CursorError("startup_timeout") from None
 
-    async def new_session(self, model):
+    async def _open_session(self):
         result = await self.call(
             "session/new", {"cwd": self.ready["cwd"], "mcpServers": []}, timeout=30
         )
         session_id = result.get("sessionId")
         if not isinstance(session_id, str) or not session_id:
             raise CursorError("protocol")
-        models = result.get("models", {}).get("availableModels", [])
-        if not any(m.get("modelId") == model for m in models if isinstance(m, dict)):
-            raise CursorError("model_unavailable")
+        model_info = result.get("models")
+        if not isinstance(model_info, dict):
+            raise CursorError("protocol")
+        models = model_info.get("availableModels")
+        catalog_ids(models)
+        return result
+
+    async def available_models(self):
+        result = await self._open_session()
+        return result["models"]["availableModels"]
+
+    async def new_session(self, model):
+        result = await self._open_session()
+        session_id = result["sessionId"]
+        try:
+            model = resolve_model(model, result["models"]["availableModels"])
+        except ModelResolutionError as exc:
+            logger.warning("%s", exc)
+            raise
         if not any(
             m.get("id") == "ask"
             for m in result.get("modes", {}).get("availableModes", [])

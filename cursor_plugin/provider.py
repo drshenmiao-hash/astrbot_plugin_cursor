@@ -12,7 +12,6 @@ from astrbot.core.provider.register import provider_cls_map, register_provider_a
 
 from . import runtime
 from .errors import CursorError, UnsupportedFeatureError
-from .protocol import explicit_model
 from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
@@ -67,9 +66,8 @@ class CursorCLIProvider(Provider):
             raise CursorError("config")
 
     async def get_models(self):
-        # No CLI invocation or billing request just to open the model picker.
-        model = runtime.settings()["model"]
-        return [model] if model else []
+        # ACP catalog only; no model prompt or automatic model selection.
+        return await runtime.available_model_ids()
 
     async def text_chat(
         self,
@@ -141,7 +139,7 @@ class CursorCLIProvider(Provider):
             raise UnsupportedFeatureError("audio")
         if has_tools or tool_calls_result or tool_choice == "required":
             raise UnsupportedFeatureError("tool_calls")
-        chosen = explicit_model(model if model is not None else self.get_model())
+        chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
         if chosen != self.settings["model"]:
             raise CursorError("model")
         messages = normalize_messages(

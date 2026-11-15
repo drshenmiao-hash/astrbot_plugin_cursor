@@ -3,7 +3,7 @@
     "description": "明确的 Cursor 模型 ID",
     "type": "string",
     "default": "",
-    "hint": "自行确认套餐内模型后填写。安装/重载自动创建 cursor_cli 来源和原生模型；新建模型 id、model 均与此值一致。留空或 auto 只建来源并提示，不创建模型，不改变默认或备用模型。"
+    "hint": "可填 ACP modelId、唯一展示名或已支持的管理端 ID；启动/重载通过 ACP availableModels 校验。cursor-grok-4.6-high 映射到 grok-4.6。新建原生 id/model 使用解析后的 modelId；空/auto/default 不建模型，有歧义时报错，不自动换模型。"
   },
   "ssh_host": {
     "description": "Cursor 专用容器的内部主机名",

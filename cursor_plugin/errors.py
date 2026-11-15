@@ -6,6 +6,8 @@ MESSAGES = {
     "config": "Cursor 配置无效，请检查插件配置。",
     "model": "请明确配置同一个 Cursor 模型 ID；不支持 Auto 或默认路由。",
     "model_unavailable": "指定模型不在 Cursor 返回的模型列表中；没有自动更换模型。",
+    "model_ambiguous": "模型名称或管理端 ID 对应多个 ACP modelId，请明确填写 modelId；未选择模型。",
+    "model_not_validated": "Cursor model_id 尚未通过 ACP 校验，请先完成登录并重载插件。",
     "model_mismatch": "Cursor 未确认指定模型，已停止请求。",
     "ask_unavailable": "Cursor 未保持 Ask 模式，已停止请求。",
     "unsupported": "Cursor 当前适配器不支持此输入能力。",

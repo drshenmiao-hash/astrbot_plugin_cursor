@@ -9,7 +9,7 @@ import sys
 import unittest
 from copy import deepcopy
 from types import ModuleType, SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from cursor_plugin import runtime
 from cursor_plugin.errors import CursorError
@@ -112,8 +112,16 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.original_settings = runtime._settings
         self.original_engine = runtime._engine
+        self.original_catalog = runtime._available_models
         runtime._engine = None
         runtime.configure({"model_id": MODEL})
+        self.catalog_patch = patch.object(
+            runtime,
+            "_fetch_available_models",
+            new=AsyncMock(return_value=[{"modelId": MODEL, "name": "Plan Model"}]),
+        )
+        self.catalog_patch.start()
+        self.addCleanup(self.catalog_patch.stop)
         self.conf = existing_config()
         self.manager = Manager(self.conf)
         self.context = SimpleNamespace(
@@ -135,6 +143,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
     def tearDown(self):
         runtime._settings = self.original_settings
         runtime._engine = self.original_engine
+        runtime._available_models = self.original_catalog
 
     def cursor_sources(self):
         return [s for s in self.conf["provider_sources"] if s.get("type") == "cursor_cli"]

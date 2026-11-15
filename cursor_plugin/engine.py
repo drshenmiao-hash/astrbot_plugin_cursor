@@ -183,6 +183,23 @@ class Engine:
             await owner.close()
         record("runtime_reset", reset_reason=reason)
 
+    async def available_models(self):
+        """One ACP session/new catalog query; never send a model prompt."""
+        async with self._condition:
+            if self.closed:
+                raise CursorError("closed")
+            rotate = self.client is not None and (
+                self.client.closed or self.session_slots >= self.cfg["max_sessions"]
+            )
+            if rotate:
+                while self.active:
+                    await self._condition.wait()
+                await self._reset_client("catalog_refresh")
+            if self.client is None:
+                await self._new_client()
+            self.session_slots += 1
+            return await self.client.available_models()
+
     async def _lease(self, job):
         async with self._condition:
             while True:

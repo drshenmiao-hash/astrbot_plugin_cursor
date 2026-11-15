@@ -47,6 +47,8 @@ docker exec -it --user '实际UID:实际GID' \
 
 浏览器打开 CLI 显示的官方 URL。登录信息只保留在管理员终端。将末尾的 `login` 改成 `status` 或 `models` 可查看状态、模型；这些是用户管理操作，插件不提供账号面板。
 
+管理端 `models` 的 ID 可能与 ACP 不同。插件以启动/重载时取得的 ACP `availableModels[].modelId` 为准；例如 `cursor-grok-4.6-high` 只在 ACP 确实包含 `grok-4.6` 时映射成功。也可直接填写 ACP ID 或唯一展示名，见 [模型 ID 说明](MODEL_IDS.md)。
+
 插件配置：
 
 ```json
@@ -89,7 +91,7 @@ docker compose -f deploy/compose.yaml exec --user cursor cursor-cli /usr/local/b
 
 AstrBot 环境需有 OpenSSH 客户端；缺少时用 `deploy/Dockerfile.astrbot` 从原镜像构建新测试镜像。参考 `deploy/astrbot-service.example.yaml` 合并测试编排字段：只读挂载 `deploy/client` 到 `/run/cursor-client`，连接 `astrbot-cursor-link`，保留原网络、数据卷、启动命令和 UID。示例片段不能替换整个 AstrBot 编排。
 
-配置 `transport=ssh`、`ssh_host=cursor-cli`、`ssh_port=2222`，使用默认专用私钥及 known_hosts 路径。修改主机名/端口时同步 known_hosts，保留主机校验。模型只在插件和 AstrBot 原生模型中填同一 ID。
+配置 `transport=ssh`、`ssh_host=cursor-cli`、`ssh_port=2222`，使用默认专用私钥及 known_hosts 路径。修改主机名/端口时同步 known_hosts，保留主机校验。只需在插件填写模型，原生模型使用自动解析出的 ACP ID。
 
 SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。诊断分别返回客户端密钥、主机校验、SSH 版本、登录卷和 CLI 构建入口哈希。入口哈希校验不是对整个 Docker 镜像 digest 的远程证明。
 
@@ -98,7 +100,7 @@ SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。�
 本次测试使用上述分支的源码，放入测试实例的 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。从仓库默认分支安装仍获得 main，不含本次自动注册补丁。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
-2. 插件自动新增 `cursor_cli` 来源及原生模型，无需手工添加。Key、API Base 留空，能力仅 text；新模型的 `id` 和 `model` 都与 `model_id` 完全相同。空/auto 时只确保来源存在并明确提示，不创建模型或自动选模型。
+2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型；Key、API Base 留空，能力仅 text，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
 3. 以 AstrBot 管理员运行 `/cursor_doctor`。也可在插件根目录执行下列命令；配置 JSON 只包含插件设置，不包含令牌：
 
 ```bash

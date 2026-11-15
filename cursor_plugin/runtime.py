@@ -2,11 +2,13 @@
 # Source persistence and reload adapted from astrbot_plugin_openai_oauth; see NOTICE.
 """Plugin configuration and native Provider lifecycle integration."""
 
+import asyncio
 import logging
 from copy import deepcopy
 
 from .engine import Engine
 from .errors import CursorError
+from .models import ModelResolutionError, catalog_ids, resolve_model
 from .settings import settings_from
 
 PROVIDER_TYPE = "cursor_cli"
@@ -14,22 +16,86 @@ DEFAULT_SOURCE_ID = PROVIDER_TYPE
 logger = logging.getLogger("astrbot")
 _settings = None
 _engine = None
+_available_models = None
 
 
 def configure(config):
-    global _settings, _engine
+    global _settings, _available_models
     _settings = settings_from(config)
+    _settings["model"] = ""  # Never publish an unvalidated management/display ID.
+    _available_models = None
     try:
         from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
         _settings["protected_paths"].append(get_astrbot_data_path())
     except ImportError:
         pass
-    if _engine is not None and _engine.cfg != _settings:
-        # Retained providers release their old engine during manager.reload().
-        # New instances must not silently keep the previous configuration when
-        # several native model instances are reloaded one after another.
-        _engine = None
+
+
+async def _fetch_available_models():
+    # Reuse a live runtime only when its connection/account settings match.
+    connection_keys = (
+        "transport",
+        "host",
+        "ssh_port",
+        "ssh_binary",
+        "identity_file",
+        "known_hosts_file",
+        "cli_binary",
+        "bubblewrap_binary",
+        "cursor_auth_path",
+        "protected_paths",
+    )
+    if (
+        _engine is not None
+        and not _engine.closed
+        and all(_engine.cfg.get(key) == _settings.get(key) for key in connection_keys)
+    ):
+        return await asyncio.wait_for(
+            _engine.available_models(), _settings["queue_timeout_seconds"]
+        )
+    probe = Engine(settings())
+    try:
+        return await asyncio.wait_for(probe.available_models(), _settings["queue_timeout_seconds"])
+    finally:
+        await probe.close()
+
+
+async def validate_configured_model():
+    """Fetch one ACP catalog before registration, without a session/prompt call."""
+    global _available_models
+    requested = settings()["requested_model"]
+    _settings["model"] = ""
+    if not requested:
+        _available_models = []
+        return None
+    _available_models = None
+    _available_models = await _fetch_available_models()
+    resolved = resolve_model_id(requested)
+    _settings["model"] = resolved
+    logger.info("Cursor model_id 已通过 ACP 校验，实际 modelId=%s", resolved)
+    return resolved
+
+
+def resolve_model_id(requested):
+    if _available_models is None:
+        raise CursorError("model_not_validated")
+    try:
+        return resolve_model(requested, _available_models)
+    except ModelResolutionError as exc:
+        # These errors contain only validated model IDs, never CLI error payloads.
+        logger.warning("%s", exc)
+        raise
+
+
+async def available_model_ids():
+    if _available_models is None:
+        await validate_configured_model()
+    return [
+        model_id
+        for model_id in catalog_ids(_available_models)
+        if model_id.casefold() not in {"auto", "auto-smart", "default"}
+    ]
 
 
 def settings():
@@ -40,7 +106,15 @@ def settings():
 
 def acquire_engine():
     global _engine
-    if _engine is None or _engine.closed:
+    if (
+        _engine is None
+        or _engine.closed
+        or any(
+            _engine.cfg.get(key) != value
+            for key, value in settings().items()
+            if key != "requested_model"
+        )
+    ):
         _engine = Engine(settings())
     _engine.references += 1
     return _engine
@@ -139,6 +213,17 @@ async def ensure_default_source_and_model(config):
         target = target or next(
             (m for m in models if owned(m) and m.get("model") == model_id), None
         )
+        if target is None:
+            for item in models:
+                if not owned(item):
+                    continue
+                try:
+                    matched = resolve_model(item.get("model"), _available_models) == model_id
+                except ModelResolutionError:
+                    continue
+                if matched:
+                    target = item
+                    break
         if target is None and any(m.get("id") == model_id for m in models):
             logger.warning(
                 "Cursor 原生模型 ID 已被其他提供商占用，未创建或覆盖模型；"
@@ -170,6 +255,7 @@ async def ensure_default_source_and_model(config):
 async def initialize(context):
     """Ensure native config, then refresh instances with the OAuth plugin's lifecycle."""
     config = context.astrbot_config_mgr.default_conf
+    await validate_configured_model()
     target_id = await ensure_default_source_and_model(config)
     manager = getattr(context, "provider_manager", None)
     if manager is None:

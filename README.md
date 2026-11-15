@@ -2,7 +2,7 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 待环境验收。15 项自动注册及 16 项历史复用回归已执行通过。常驻 CLI、SSH、本地隔离、真实联通与计费尚未完成环境验收。
+> 0.2.0 待环境验收。24 项模型解析、15 项自动注册及 16 项历史复用回归已执行通过。真实 CLI、SSH、本地隔离、联通与计费尚未完成环境验收。
 
 基础版本已合入默认分支 `main`。最新历史复用补丁位于 `fix/persistent-cli-provider`，见 [补丁说明](docs/HISTORY_PATCH.md)。
 
@@ -22,7 +22,7 @@
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
-| `model_id` | 空 | 明确、套餐范围已确认的模型 ID；新建原生模型的 `id` 和 `model` 均取此值；空/auto 不建模型 |
+| `model_id` | 空 | 明确的 ACP modelId、唯一展示名或支持的管理端 ID；以 ACP 列表为准，新建原生 `id` 和 `model` 均使用解析后的 modelId；空/auto/default 不建模型 |
 | `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
 | `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
 | `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
@@ -41,7 +41,9 @@
 
 插件安装/重载时自动确保 `cursor_cli` 来源存在，Key、API Base 留空；模型只声明 `text`。重复加载会更新或复用已有配置，不重复新增。只在你自行选择后使用 Cursor，插件不切换当前默认模型，也不改 OpenAI OAuth、DeepSeek 或备用模型设置。
 
-已存在同一 Cursor 模型、但原生 `id` 是自定义别名时，沿用该条目，`model` 保持与配置完全相同，不重命名或另建一份，以免破坏默认/备用引用。ID 被其他提供商占用时提示冲突，不覆盖配置。细节见 [自动注册说明](docs/REGISTRATION.md)。
+启动或重载时通过 ACP `session/new` 查询一次 `availableModels`，先精确匹配 `modelId`，再唯一匹配展示名或明确别名。`cursor-grok-4.6-high` 对应 `grok-4.6`，后者必须实际出现在 ACP 列表中；有歧义时报错。`cursor-admin models` 的管理端 ID 不作为最终判断依据，见 [模型 ID 解析规则](docs/MODEL_IDS.md)。
+
+已存在同一 Cursor 模型、但原生 `id` 是自定义别名时，沿用该条目，`model` 使用解析后的 modelId，不重命名或另建一份，以免破坏默认/备用引用。ID 被其他提供商占用时提示冲突，不覆盖配置。细节见 [自动注册说明](docs/REGISTRATION.md)。
 
 ## 复用与并发的边界
 
@@ -74,6 +76,9 @@ python -m unittest -v tests.test_history_reuse
 
 # 自动注册回归，使用配置保存/ProviderManager 测试替身
 python -m unittest -v tests.test_registration
+
+# 模型解析、自动注册和历史复用回归；使用模拟 ACP 列表，无网络或子进程
+python -m unittest tests.test_models tests.test_registration tests.test_history_reuse
 
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock
