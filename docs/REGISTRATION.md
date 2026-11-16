@@ -1,6 +1,6 @@
 # 自动注册来源与原生模型
 
-代码位于 `fix/persistent-cli-provider`；此补丁不合入 main，不操作生产环境。
+自动注册已包含在默认分支 `main`，安装或更新后保存插件配置并重载即可使用。
 
 安装或重载时：
 
@@ -41,4 +41,4 @@ python -m unittest -v tests.test_registration tests.test_history_reuse
 
 注册测试运行真实 `runtime.configure/initialize` 和配置规划/保存/回滚代码；AstrBot 配置保存、ProviderManager 及生成的 Provider 实例使用明确的内存替身。覆盖首次创建、重复加载、空/auto、默认/备用及 OAuth/DeepSeek 不变、text 能力、已有配置更新、别名、禁用、ID 冲突、冷/热启动和保存失败。没有调用 CLI、SSH、网络或真实账户；未覆盖实际 AstrBot WebUI 或生产安装。
 
-回退本次提交可用 `git revert <本次提交号>`，再重载 Cursor Provider。已写入的配置不会被自动删除，以免破坏用户后来设置的引用；如需移除注册项，先确认没有默认/备用/会话引用，再在 AstrBot 模型设置中处理。
+回退时恢复目标旧版本的完整插件目录并重载。已写入的配置不会被自动删除，以免破坏用户后来设置的引用；如需移除注册项，先确认没有默认/备用/会话引用，再在 AstrBot 模型设置中处理。

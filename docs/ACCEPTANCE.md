@@ -1,10 +1,14 @@
 # 检查与验收
 
-最新组合已实际运行时钟、本地统计、模型解析、注册和历史复用共 79 项，命令及完整输出见 [SYSTEM_CLOCK.md](SYSTEM_CLOCK.md)。使用模拟 ACP 和临时本地数据，不代表真实 Cursor 联通或官方计费。
+默认分支 main 包含下列已执行的自动化检查：79 项时钟、本地统计、模型解析、注册及历史复用回归，以及 23 项纯逻辑检查。内存回归使用模拟 ACP/ProviderManager 和临时数据，不访问真实账户，不代表 Cursor 套餐计费结论。
 
-只将实际执行的项目记为通过。历史复用补丁已补齐并执行 16 项内存回归测试，见 [补丁说明和输出](HISTORY_PATCH.md)。下面的纯逻辑脚本也重新执行通过。环境脚本交给部署者运行。内存替身和模拟 ACP 都不代表官方 CLI、AstrBot 实机联动或套餐计费通过。
+完整回归命令：
 
-自动注册补丁另新增 15 项回归，和上述 16 项合跑共 31 项通过。命令为 `python -m unittest -v tests.test_registration tests.test_history_reuse`，完整输出见 [REGISTRATION_TEST_OUTPUT.txt](REGISTRATION_TEST_OUTPUT.txt)，保护范围及测试替身边界见 [REGISTRATION.md](REGISTRATION.md)。
+```bash
+python -m unittest tests.test_system_clock tests.test_usage tests.test_models tests.test_registration tests.test_history_reuse
+```
+
+79 项通过的原始输出见 [SYSTEM_CLOCK_TEST_OUTPUT.txt](SYSTEM_CLOCK_TEST_OUTPUT.txt)。环境脚本及真实账户的检查结果应单独记录，SKIP 不计作通过。
 
 ## A. 已执行的纯逻辑
 

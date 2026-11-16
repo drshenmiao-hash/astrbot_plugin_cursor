@@ -1,7 +1,7 @@
 name: astrbot_plugin_cursor
 display_name: Cursor CLI
 short_desc: 使用官方 Cursor CLI 的原生纯文本聊天 Provider。
-desc: 常驻 CLI 与会话复用，支持本地隔离或专用运行器；固定 Ask 与指定模型。运行时和订阅扣费待环境验收。
+desc: 官方 Cursor CLI 常驻 Provider，支持自动注册、ACP 模型解析、增量复用和插件本地统计；固定 Ask，能力仅文本。
 version: 0.2.0
 author: drshenmiao-hash
 repo: https://github.com/drshenmiao-hash/astrbot_plugin_cursor

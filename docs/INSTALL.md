@@ -1,9 +1,9 @@
 # 安装与升级
 
-基础版本位于默认分支 `main`，本次自动注册和历史复用补丁仅在 `fix/persistent-cli-provider`。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
+适用于 Ubuntu、1Panel 和 Docker，接口参考 AstrBot 4.29.4。默认分支 `main` 已包含自动注册、ACP 模型 ID 解析、增量会话、时钟处理和本地统计。需要补充 CLI 或系统依赖时，使用下列配方构建新镜像。
 
 ```bash
-git clone --branch fix/persistent-cli-provider https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
+git clone https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
 cd /opt/astrbot-cursor
 ```
 
@@ -97,7 +97,7 @@ SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。�
 
 ## 安装插件与检查
 
-本次测试使用上述分支的源码，放入测试实例的 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。从仓库默认分支安装仍获得 main，不含本次自动注册补丁。
+在 AstrBot 插件页使用 `https://github.com/drshenmiao-hash/astrbot_plugin_cursor` 安装或更新。手动安装时，将 main 的源码放入 `data/plugins/astrbot_plugin_cursor/`；根目录包含 `main.py` 和 `metadata.yaml`，不要多嵌套一层目录。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
 2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型；Key、API Base 留空，能力仅 text，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
@@ -111,8 +111,25 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 
 自动注册不改变当前默认模型。需要使用 Cursor 时由你在目标会话中选择；已有来源和相同模型会复用，不重复创建或改名。ID 冲突时不会覆盖其他提供商，见 [注册规则](REGISTRATION.md)。
 
+## 管理员命令
+
+- `/cursor_doctor`：检查 CLI、登录、隔离或 SSH 依赖，不发送聊天提示词。
+- `/cursor_usage`：查看插件本地统计；加 `session`、`day` 或 `model` 查看分组，详见 [本地统计](LOCAL_USAGE.md)。它不是 Cursor 账单或套餐余额。
+- `/cursor_source`：查看许可证和当前源码地址。
+
 ## 升级与回滚
 
-先记录旧插件提交、AstrBot 镜像、CLI 镜像和配置，备份专用密钥及登录卷。获取新提交后，在测试编排构建新镜像并执行环境脚本；通过后再由你更新正式编排和插件。更新 CLI 时同步版本与官方发行包 SHA，重新确认 ACP、Ask 和凭据格式。
+插件源码更新可直接在 AstrBot 插件页执行更新并重载；只有 CLI 或系统依赖改变时才需要重新构建对应镜像。记录旧插件提交、镜像和配置，保留专用密钥、登录卷，以及 `data/plugin_data/astrbot_plugin_cursor/` 下的本地统计数据库和匿名会话 key。
+
+手动 Git 安装、或之前使用开发分支时，在源码目录切回 main 并更新：
+
+```bash
+git status --short
+git fetch origin
+git switch main
+git merge --ff-only origin/main
+```
+
+上述命令不覆盖本地未提交修改；有冲突时先处理本地修改，再更新、重载插件。更新 CLI 时同步版本与官方发行包 SHA，重新确认 ACP、Ask 和凭据格式。
 
 升级会结束旧常驻进程，丢弃内存会话缓存，下一轮重发完整上下文。回滚恢复旧插件和对应镜像再重载；不要执行 `docker compose down -v`，它会删除登录卷。OpenAI OAuth 插件配置及 AstrBot 的备用模型设置无需调整。

@@ -39,4 +39,4 @@ python -m unittest tests.test_usage tests.test_models tests.test_registration te
 
 69 项通过，其中 14 项本地统计回归，完整实际输出见 [LOCAL_USAGE_TEST_OUTPUT.txt](LOCAL_USAGE_TEST_OUTPUT.txt)。覆盖成功/失败、全部元数据、按模型/UTC 日/会话汇总、重启持久化、匿名标识稳定、请求去重、只写专用目录、不存正文/凭据、默认配置不变、缓存不额外调用模型、写入失败不影响回复，以及失败 ACP 请求保留实际 modelId。
 
-测试使用临时目录和内存 ACP/ProviderManager 替身，不连接真实 Cursor；管理员权限装饰器另有静态检查，尚未验证实际 AstrBot/QQ 命令链路。
+测试使用临时目录和内存 ACP/ProviderManager 替身，不连接真实 Cursor；管理员权限装饰器另有静态检查。以上自动化结果不包含实际 AstrBot/QQ 命令链路。

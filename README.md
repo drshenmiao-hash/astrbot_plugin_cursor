@@ -2,15 +2,23 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 待环境验收。时钟、本地统计、模型解析、注册及历史复用共 79 项回归已执行通过。真实 CLI、SSH、本地隔离、联通与计费尚未完成环境验收。
+当前版本：0.2.0。自动注册、ACP 模型 ID 解析、增量复用、时钟处理和本地统计均已包含在默认分支 `main`。
 
-基础版本已合入默认分支 `main`。最新历史复用补丁位于 `fix/persistent-cli-provider`，见 [补丁说明](docs/HISTORY_PATCH.md)。
+## 安装与使用
 
-同一分支还包含自动注册补丁：保存明确的 `model_id` 后重载插件，即会新增来源和原生模型，不需要在面板手工添加。原有默认模型和备用模型保持不变。
+在 AstrBot 插件页使用以下仓库地址安装或更新：
+
+```text
+https://github.com/drshenmiao-hash/astrbot_plugin_cursor
+```
+
+先在 CLI 所在环境自行登录 Cursor，再在插件配置中填写运行方式和明确的 `model_id`，保存并重载。插件通过 ACP 校验后自动新增来源和原生模型，无需手工添加；由你在目标会话中选择使用。原有默认模型、备用模型和其他提供商配置保持不变。
+
+Ubuntu、1Panel、Docker 的本地模式及可选 SSH 模式见 [安装与升级指南](docs/INSTALL.md)。无需安装 Cursor 桌面版。
 
 管理员可用 `/cursor_usage` 查看插件本地统计，或加 `session`、`day`、`model` 查看分组。统计不是 Cursor 账单或套餐额度，数据仅保存到插件专属目录，见 [本地统计说明](docs/LOCAL_USAGE.md)。
 
-## 本次修改
+## 功能
 
 - 使用官方 `agent acp` 常驻进程，通过 JSON-RPC 维护会话，固定 Ask 和明确模型 ID。
 - 对话历史连续时只发新增消息；system 独立比对，以差异增量更新现有会话。对话前缀变化、历史压缩或请求取消后重建会话。
@@ -80,8 +88,8 @@ python -m unittest -v tests.test_history_reuse
 # 自动注册回归，使用配置保存/ProviderManager 测试替身
 python -m unittest -v tests.test_registration
 
-# 模型解析、自动注册和历史复用回归；使用模拟 ACP 列表，无网络或子进程
-python -m unittest tests.test_models tests.test_registration tests.test_history_reuse
+# 完整内存回归：时钟、统计、模型解析、注册和历史复用
+python -m unittest tests.test_system_clock tests.test_usage tests.test_models tests.test_registration tests.test_history_reuse
 
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock
@@ -94,6 +102,8 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 ```
 
 机器人管理员可运行 `/cursor_doctor`。每项环境检查打印 PASS、FAIL 或 SKIP，并带 RAW 结果或异常堆栈；不会把认证报文或密钥打印出来。详细说明见 [测试指南](docs/ACCEPTANCE.md)。
+
+完整内存回归已执行，79 项通过，原始输出见 [测试记录](docs/SYSTEM_CLOCK_TEST_OUTPUT.txt)。自动化测试使用模拟 ACP 和临时数据，不代表 Cursor 套餐扣费结论；本地统计也不用于证明官方消耗。
 
 ## 环境与来源
 
