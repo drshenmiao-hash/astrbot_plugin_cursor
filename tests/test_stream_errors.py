@@ -8,6 +8,7 @@ import asyncio
 import json
 import unittest
 from collections import deque
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from cursor_plugin import metrics
@@ -58,6 +59,46 @@ class ReplyClassificationTests(unittest.TestCase):
         for text in NORMAL:
             with self.subTest(reply=text):
                 self.assertIsNone(classify_reply_error(text))
+
+
+class RpcFailureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_prompt_rpc_error_preserves_cause_and_retry_policy(self):
+        for method, message, rpc_code, code, retryable in (
+            ("session/prompt", STALL, -32603, "connection_stalled", True),
+            ("session/prompt", PING, -32603, "ping_timeout", True),
+            ("session/prompt", "RetriableError: Quota exceeded", -32603, "quota_exhausted", False),
+            ("session/prompt", PING, -32000, "not_logged_in", False),
+            ("session/new", PING, -32603, "ping_timeout", False),
+        ):
+            with self.subTest(method=method, message=message, rpc_code=rpc_code):
+                stdout = asyncio.StreamReader()
+
+                def write(frame):
+                    request = json.loads(frame)
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request["id"],
+                        "error": {"code": rpc_code, "message": message},
+                    }
+                    stdout.feed_data(json.dumps(response).encode() + b"\n")
+
+                process = SimpleNamespace(
+                    stdin=SimpleNamespace(write=write, drain=AsyncMock()),
+                    stdout=stdout,
+                    stderr=asyncio.StreamReader(),
+                )
+                client = ACPClient(
+                    process, frame_limit=4096, output_limit=4096, ready={"cwd": "/work"}
+                )
+                self.addAsyncCleanup(client.close)
+                with self.assertRaises(CursorError) as caught:
+                    if method == "session/prompt":
+                        await client.prompt("rpc-session", "test")
+                    else:
+                        await client.available_models()
+                self.assertEqual(caught.exception.code, code)
+                self.assertEqual(caught.exception.retryable, retryable)
+                self.assertNotIn(message, str(caught.exception))
 
 
 class StreamPeer(ACPClient):

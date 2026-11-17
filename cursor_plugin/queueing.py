@@ -23,6 +23,12 @@ class RequestQueue:
             self.pending.append(job)
             self.condition.notify_all()
 
+    async def discard(self, job):
+        async with self.condition:
+            if job in self.pending:
+                self.pending.remove(job)
+                self.condition.notify_all()
+
     async def get(self):
         async with self.condition:
             while True:

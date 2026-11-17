@@ -182,6 +182,12 @@ class ACPClient:
             if error_code:
                 raise CursorStreamError(error_code)
             return {"text": text, "wire_bytes": state.get("wire_bytes", 0)}
+        except CursorStreamError:
+            raise
+        except CursorError as exc:
+            if exc.code in {"connection_stalled", "ping_timeout", "upstream_retryable"}:
+                raise CursorStreamError(exc.code) from None
+            raise
         finally:
             if stats is not None:
                 stats.update(wire_bytes=state.get("wire_bytes", 0), output_bytes=state["size"])
@@ -288,11 +294,13 @@ class ACPClient:
                         error = message["error"]
                         # ACP -32000 means authentication required. Never expose
                         # raw RPC error data, which can include prompts or URLs.
-                        code = (
-                            "not_logged_in"
-                            if error.get("code") == -32000
-                            else classify_error(str(error.get("message", "")))
-                        )
+                        if error.get("code") == -32000:
+                            code = "not_logged_in"
+                        else:
+                            message_text = str(error.get("message", ""))
+                            code = classify_error(message_text)
+                            if code in {"cli_failed", "timeout"}:
+                                code = classify_reply_error(message_text) or code
                         future.set_exception(CursorError(code))
                     elif isinstance(message.get("result"), dict):
                         future.set_result(message["result"])

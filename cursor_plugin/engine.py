@@ -119,6 +119,8 @@ class Engine:
             raise
         finally:
             notice.cancel()
+            if job.cancel.is_set():
+                await self.queue.discard(job)
             await asyncio.gather(notice, return_exceptions=True)
             self._jobs.pop(job.request_id, None)
 
