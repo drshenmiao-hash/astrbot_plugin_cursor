@@ -7,7 +7,7 @@ import logging
 from copy import deepcopy
 
 from .engine import Engine
-from .errors import CursorError
+from .errors import MESSAGES, CursorError
 from .models import ModelResolutionError, catalog_ids, resolve_model
 from .settings import settings_from
 from .usage import UsageStore, format_summary
@@ -19,6 +19,7 @@ _settings = None
 _engine = None
 _available_models = None
 _usage_store = None
+_startup_failure = None
 
 
 def configure_usage(context, *, directory=None):
@@ -70,13 +71,19 @@ async def usage_dashboard(days):
         raise CursorError("usage_unavailable")
     report = await asyncio.to_thread(store.dashboard, days)
     cfg = settings()
+    startup_error = (
+        {"code": _startup_failure, "message": MESSAGES[_startup_failure]}
+        if _startup_failure
+        else None
+    )
     return {
         **report,
         "runtime": engine_health(),
         "model": cfg["model"] or cfg["requested_model"],
-        "validated": bool(cfg["model"]),
+        "validated": bool(cfg["model"]) and startup_error is None,
         "concurrency_limit": cfg["max_concurrency"],
         "transport": cfg["transport"],
+        "startup_error": startup_error,
     }
 
 
@@ -91,6 +98,17 @@ def configure(config):
         _settings["protected_paths"].append(get_astrbot_data_path())
     except ImportError:
         pass
+
+
+def record_startup_failure(code):
+    global _startup_failure
+    _startup_failure = code
+    logger.warning("cursor_provider_startup code=%s", code)
+
+
+def _check_startup():
+    if _startup_failure:
+        raise CursorError(_startup_failure)
 
 
 async def _fetch_available_models():
@@ -139,6 +157,7 @@ async def validate_configured_model():
 
 
 def resolve_model_id(requested):
+    _check_startup()
     if _available_models is None:
         raise CursorError("model_not_validated")
     try:
@@ -150,6 +169,7 @@ def resolve_model_id(requested):
 
 
 async def available_model_ids():
+    _check_startup()
     if _available_models is None:
         await validate_configured_model()
     return [
@@ -315,6 +335,8 @@ async def ensure_default_source_and_model(config):
 
 async def initialize(context):
     """Ensure native config, then refresh instances with the OAuth plugin's lifecycle."""
+    global _startup_failure
+    _startup_failure = None
     config = context.astrbot_config_mgr.default_conf
     await validate_configured_model()
     target_id = await ensure_default_source_and_model(config)

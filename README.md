@@ -2,7 +2,7 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> v0.3.0 预发布版增加了用量管理页。请下载源码 ZIP，在 AstrBot 插件页上传并重载。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.0 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.0)
+> v0.3.1 预发布版修复了启动失败时无法读取用量、排队超时后最近失败未更新的问题。请下载源码 ZIP，在 AstrBot 插件页上传并重载。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.1)
 
 此预发布版来自 `fix/persistent-cli-provider`。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 

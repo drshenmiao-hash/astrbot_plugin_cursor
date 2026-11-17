@@ -355,7 +355,7 @@ class Engine:
                 code = "queue_timeout"
                 error = CursorError(code)
             except CursorError as exc:
-                code = self.last_failure = exc.code
+                code = exc.code
                 error = exc
             except asyncio.CancelledError:
                 code = "closed"
@@ -365,7 +365,7 @@ class Engine:
                 error = CursorError(code)
                 raise
             except Exception:
-                code = self.last_failure = "cli_failed"
+                code = "cli_failed"
                 error = CursorError(code)
             finally:
                 # Wake the caller even when startup failed before a prompt began.
@@ -389,6 +389,8 @@ class Engine:
         if job.accounted:
             return
         job.accounted = True
+        if code not in {"ok", "cancelled", "closed"}:
+            self.last_failure = code
         record(
             "request_finished",
             request_id=job.request_id,

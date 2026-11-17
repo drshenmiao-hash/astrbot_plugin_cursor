@@ -67,14 +67,17 @@ class QueueCleanupTests(unittest.IsolatedAsyncioTestCase):
         await self.assert_replacement_queued()
 
     async def test_expired_pending_request_releases_its_queue_slot(self):
+        self.engine.last_failure = "ping_timeout"
         self.engine.cfg["queue_timeout_seconds"] = 0.05
         queued = self.submit("expired")
         await self.wait_for_slot_to_fill()
         with self.assertRaises(CursorError) as caught:
             await queued
         self.assertEqual(caught.exception.code, "queue_timeout")
+        self.assertEqual(self.engine.health()["last_failure"], "queue_timeout")
         self.engine.cfg["queue_timeout_seconds"] = 1
         await self.assert_replacement_queued()
+        self.assertEqual(self.engine.health()["last_failure"], "queue_timeout")
 
     async def test_close_records_running_and_queued_requests_once(self):
         queued = self.submit("queued")

@@ -99,7 +99,11 @@ function render(data) {
   const live = data.runtime;
   write("model", data.model || "未配置");
   write("transport", transports[data.transport] || "—");
-  write("runtime-state", live.process_alive ? "CLI 运行中" : data.validated ? "等待请求" : "模型待校验");
+  const startupError = data.startup_error;
+  const runtimeState = live.process_alive ? "CLI 运行中" : data.validated ? "等待请求" : "模型待校验";
+  write("runtime-state", startupError ? "启动失败" : runtimeState);
+  byId("startup-error").hidden = !startupError;
+  if (startupError) write("startup-error", `[${startupError.code}] ${startupError.message}`);
   write("active", `${count(live.active)} / ${count(data.concurrency_limit)}`);
   write("queued", count(live.queue_depth));
   write("sessions", count(live.cached_sessions));
