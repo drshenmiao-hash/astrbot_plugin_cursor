@@ -3,6 +3,7 @@
 import importlib
 import sys
 import unittest
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -69,7 +70,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.context = SimpleNamespace(
             provider_manager=self.manager,
             astrbot_config_mgr=SimpleNamespace(default_conf=self.config),
+            registered_web_apis=[],
         )
+        self.context.register_web_api = partial(main.Context.register_web_api, self.context)
         self.plugin = main.CursorCLIPlugin(self.context, {"model_id": "mock-plan-model"})
         catalog = patch.object(
             main.runtime,
@@ -118,7 +121,21 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(old._closed)
 
     async def test_plugin_exit_does_not_delete_host_owned_models(self):
-        # AstrBot calls plugin teardown only when explicitly defined on the class.
-        # Like the reference plugin, no teardown here removes Provider instances.
-        self.assertNotIn("terminate", main.CursorCLIPlugin.__dict__)
-        self.assertFalse(hasattr(self.context, "_astrbot_cursor_cli_reload_state"))
+        await self.plugin.initialize()
+        before = self.manager.inst_map.copy()
+        await self.plugin.terminate()
+        self.assertEqual(self.manager.inst_map, before)
+        self.assertIs(self.manager.curr_provider_inst, self.manager.oauth)
+        self.assertFalse(self.plugin._usage_page.active)
+
+    async def test_reloading_plugin_replaces_registered_usage_route(self):
+        await self.plugin.initialize()
+        await self.plugin.terminate()
+        replacement = main.CursorCLIPlugin(self.context, {"model_id": "mock-plan-model"})
+        self.addAsyncCleanup(replacement.terminate)
+        await replacement.initialize()
+
+        ((route, handler, methods, _description),) = self.context.registered_web_apis
+        self.assertEqual(route, "/astrbot_plugin_cursor/usage/dashboard")
+        self.assertEqual(methods, ["POST"])
+        self.assertEqual(handler, replacement._usage_page.handle)

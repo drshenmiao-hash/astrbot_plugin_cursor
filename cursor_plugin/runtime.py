@@ -64,6 +64,22 @@ async def local_usage(group="total", key=""):
         return "无法读取插件本地统计，请检查数据目录和统计写入错误日志；这不是 Cursor 账单。"
 
 
+async def usage_dashboard(days):
+    store = _usage_store
+    if store is None:
+        raise CursorError("usage_unavailable")
+    report = await asyncio.to_thread(store.dashboard, days)
+    cfg = settings()
+    return {
+        **report,
+        "runtime": engine_health(),
+        "model": cfg["model"] or cfg["requested_model"],
+        "validated": bool(cfg["model"]),
+        "concurrency_limit": cfg["max_concurrency"],
+        "transport": cfg["transport"],
+    }
+
+
 def configure(config):
     global _settings, _available_models
     _settings = settings_from(config)

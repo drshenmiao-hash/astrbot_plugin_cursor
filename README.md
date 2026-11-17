@@ -2,13 +2,13 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> 0.2.0 待环境验收。时钟、本地统计、模型解析、注册及历史复用共 79 项回归已执行通过。真实 CLI、SSH、本地隔离、联通与计费尚未完成环境验收。
+> v0.3.0 预发布版增加了用量管理页。请下载源码 ZIP，在 AstrBot 插件页上传并重载。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.0 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.0)
 
-基础版本已合入默认分支 `main`。最新历史复用补丁位于 `fix/persistent-cli-provider`，见 [补丁说明](docs/HISTORY_PATCH.md)。
+此预发布版来自 `fix/persistent-cli-provider`。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 
 同一分支还包含自动注册补丁：保存明确的 `model_id` 后重载插件，即会新增来源和原生模型，不需要在面板手工添加。原有默认模型和备用模型保持不变。
 
-管理员可用 `/cursor_usage` 查看插件本地统计，或加 `session`、`day`、`model` 查看分组。统计不是 Cursor 账单或套餐额度，数据仅保存到插件专属目录，见 [本地统计说明](docs/LOCAL_USAGE.md)。
+登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。页面读取插件专属目录中的本地统计，套餐额度以 Cursor 用量页为准。[本地统计说明](docs/LOCAL_USAGE.md)
 
 ## 本次修改
 
