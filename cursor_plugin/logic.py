@@ -241,3 +241,33 @@ def classify_error(raw, *, stage="request"):
     if "timeout" in text or "timed out" in text:
         return "startup_timeout" if stage == "startup" else "timeout"
     return "cli_failed"
+
+
+def classify_reply_error(text):
+    """Recognize machine error replies, not prose that mentions an error phrase."""
+    lines = text.strip().splitlines()
+    if not lines:
+        return None
+    for line in dict.fromkeys((lines[0].strip(), lines[-1].strip())):
+        stripped = re.sub(r"^(?:error\s*:\s*)+", "", line, flags=re.IGNORECASE)
+        retryable = re.match(r"^RetriableError(?:\s*:\s*|$)", stripped, re.IGNORECASE)
+        marked = stripped != line
+        if retryable:
+            reason = stripped[retryable.end() :].casefold()
+        else:
+            if len(lines) > 1 and not marked:
+                continue
+            match = re.fullmatch(
+                r"(?:\[unavailable\]\s*)?(connection\s+stalled|ping\s+timed\s+out)[.!]?",
+                stripped,
+                re.IGNORECASE,
+            )
+            if not match:
+                continue
+            reason = match[1].casefold()
+        if re.search(r"\bconnection\s+stalled\b", reason):
+            return "connection_stalled"
+        if re.search(r"\bping\s+timed\s+out\b", reason):
+            return "ping_timeout"
+        return "upstream_retryable"
+    return None

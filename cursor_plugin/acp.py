@@ -5,8 +5,8 @@ import json
 import logging
 import time
 
-from .errors import CursorError
-from .logic import classify_error
+from .errors import CursorError, CursorStreamError
+from .logic import classify_error, classify_reply_error
 from .models import ModelResolutionError, catalog_ids, resolve_model
 
 logger = logging.getLogger("astrbot")
@@ -178,6 +178,9 @@ class ACPClient:
             text = "".join(state["parts"])
             if not text.strip():
                 raise CursorError("empty_output")
+            error_code = classify_reply_error(text)
+            if error_code:
+                raise CursorStreamError(error_code)
             return {"text": text, "wire_bytes": state.get("wire_bytes", 0)}
         finally:
             if stats is not None:

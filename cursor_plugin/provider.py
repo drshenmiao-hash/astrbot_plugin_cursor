@@ -11,7 +11,7 @@ from astrbot.api.provider import LLMResponse, Provider
 from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
 
 from . import runtime
-from .errors import CursorError, UnsupportedFeatureError
+from .errors import CursorError, UnsupportedFeatureError, retry_stream_errors
 from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
@@ -100,6 +100,7 @@ class CursorCLIProvider(Provider):
                 session_id=session_id,
                 conversation_id=kwargs.get("conversation_id"),
                 request_sequence=kwargs.get("request_sequence"),
+                request_max_retries=request_max_retries,
             )
         except asyncio.CancelledError:
             raise
@@ -125,6 +126,7 @@ class CursorCLIProvider(Provider):
         session_id,
         conversation_id,
         request_sequence,
+        request_max_retries=None,
     ):
         if self._closed:
             raise CursorError("closed")
@@ -173,21 +175,24 @@ class CursorCLIProvider(Provider):
                     )
                 )
 
-        task = asyncio.create_task(
-            self.engine.submit(
-                messages,
-                scope,
-                on_queued=on_queued,
-                sequence=request_sequence,
-                stats_session=stats_session,
+        async def attempt():
+            task = asyncio.create_task(
+                self.engine.submit(
+                    messages,
+                    scope,
+                    on_queued=on_queued,
+                    sequence=request_sequence,
+                    stats_session=stats_session,
+                )
             )
-        )
-        self._pending.add(task)
-        try:
-            text = await task
-            return LLMResponse(role="assistant", completion_text=text)
-        finally:
-            self._pending.discard(task)
+            self._pending.add(task)
+            try:
+                return await task
+            finally:
+                self._pending.discard(task)
+
+        text = await retry_stream_errors(attempt, request_max_retries=request_max_retries)
+        return LLMResponse(role="assistant", completion_text=text)
 
     async def text_chat_stream(self, *args, **kwargs):
         # AstrBot may request streaming. Emit one final response, never fake deltas.

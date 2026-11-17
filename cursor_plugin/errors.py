@@ -1,5 +1,7 @@
 """Typed, fixed errors for routing and diagnostics; upstream payloads stay private."""
 
+import logging
+
 MESSAGES = {
     "registration_save_failed": "Cursor 来源或模型配置未能保存，请检查 AstrBot 配置写入权限并重载插件。",
     "source_id_conflict": "cursor_cli 来源 ID 已被其他提供商占用；未覆盖已有配置，请处理冲突后重载。",
@@ -9,6 +11,9 @@ MESSAGES = {
     "model_ambiguous": "模型名称或管理端 ID 对应多个 ACP modelId，请明确填写 modelId；未选择模型。",
     "model_not_validated": "Cursor model_id 尚未通过 ACP 校验，请先完成登录并重载插件。",
     "model_mismatch": "Cursor 未确认指定模型，已停止请求。",
+    "connection_stalled": "Cursor 生成连接停滞；请稍后重试或使用备用模型。",
+    "ping_timeout": "Cursor 生成连接心跳超时；请稍后重试或使用备用模型。",
+    "upstream_retryable": "Cursor 生成流暂时失败；请稍后重试或使用备用模型。",
     "ask_unavailable": "Cursor 未保持 Ask 模式，已停止请求。",
     "unsupported": "Cursor 当前适配器不支持此输入能力。",
     "context_limit": "完整上下文超过 context_max_bytes，已报错；不会截断或悄悄丢弃历史。",
@@ -69,3 +74,24 @@ class UnsupportedFeatureError(CursorError):
             self,
             f"[cursor:{self.code}] 当前 Cursor ACP 适配器不支持 {self.feature}，请使用支持该能力的模型。",
         )
+
+
+class CursorStreamError(CursorError):
+    retryable = True
+
+
+async def retry_stream_errors(operation, *, request_max_retries=None):
+    """At most one retry of a detected stream error; other failures propagate."""
+    retries = 0 if isinstance(request_max_retries, int) and request_max_retries <= 0 else 1
+    for attempt in range(retries + 1):
+        try:
+            return await operation()
+        except CursorStreamError as exc:
+            logging.getLogger("astrbot").warning(
+                "cursor_stream_failure code=%s attempt=%d max_attempts=%d retryable=true",
+                exc.code,
+                attempt + 1,
+                retries + 1,
+            )
+            if attempt == retries:
+                raise
