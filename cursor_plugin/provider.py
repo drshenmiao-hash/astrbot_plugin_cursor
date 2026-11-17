@@ -169,11 +169,7 @@ class CursorCLIProvider(Provider):
 
         async def on_queued(depth):
             if event is not None:
-                await event.send(
-                    MessageChain().message(
-                        f"Cursor 请求正在排队（等待中约 {depth} 条），超时会明确回复。"
-                    )
-                )
+                await event.send(MessageChain().message("呜呜等一下"))
 
         async def attempt():
             task = asyncio.create_task(
