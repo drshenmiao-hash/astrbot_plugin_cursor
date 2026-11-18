@@ -83,7 +83,7 @@ class CursorStreamError(CursorError):
 
 async def retry_stream_errors(operation, *, request_max_retries=None):
     """At most one retry of a detected stream error; other failures propagate."""
-    retries = 0 if isinstance(request_max_retries, int) and request_max_retries <= 0 else 1
+    retries = 0 if isinstance(request_max_retries, int) and request_max_retries <= 1 else 1
     for attempt in range(retries + 1):
         try:
             return await operation()

@@ -8,6 +8,12 @@ from .system_clock import current_clock_fields, raw_append_suffix, semantic_syst
 
 _REASONING_BLOCK = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL)
 _TRAILING_REASONING_CLOSE = re.compile(r"</(?:think|thinking)>\s*$")
+_MACHINE_CHUNK_TAIL = re.compile(
+    r"(?:error[ \t]*:[ \t]*)*retriableerror[ \t]*:[ \t]*"
+    r"(?:\[unavailable\][ \t]*)?(?:connection[ \t]+stalled|ping[ \t]+timed[ \t]+out)"
+    r"[.!]?[ \t]*$",
+    re.IGNORECASE,
+)
 
 
 def history_hashes(history):
@@ -270,4 +276,20 @@ def classify_reply_error(text):
         if re.search(r"\bping\s+timed\s+out\b", reason):
             return "ping_timeout"
         return "upstream_retryable"
+    return None
+
+
+def classify_chunk_tail_error(text, chunks):
+    """Check a terminal machine diagnostic starting in a separate ACP text chunk."""
+    trimmed = text.rstrip()
+    match = _MACHINE_CHUNK_TAIL.search(trimmed, max(0, len(trimmed) - 256))
+    if not match:
+        return None
+    offset = 0
+    for chunk in chunks:
+        if offset + len(chunk) - len(chunk.lstrip()) == match.start():
+            return classify_reply_error(match[0])
+        offset += len(chunk)
+        if offset > match.start():
+            break
     return None

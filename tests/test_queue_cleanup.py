@@ -82,6 +82,10 @@ class QueueCleanupTests(unittest.IsolatedAsyncioTestCase):
     async def test_close_records_running_and_queued_requests_once(self):
         queued = self.submit("queued")
         await self.wait_for_slot_to_fill()
+        blocked = self.submit("waiting-for-space")
+        async with asyncio.timeout(1):
+            while len(self.engine._jobs) < 3:
+                await asyncio.sleep(0)
 
         async def notify(*_args):
             self.release.set()
@@ -89,12 +93,15 @@ class QueueCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.client.notify = notify
         with patch("cursor_plugin.engine.record") as record:
             await self.engine.close()
-        for task in (self.first, queued):
+        for task in (self.first, queued, blocked):
             with self.assertRaises(CursorError) as error:
-                await task
+                await asyncio.wait_for(task, 1)
             self.assertEqual(error.exception.code, "closed")
         finished = [
             call.kwargs for call in record.call_args_list if call.args == ("request_finished",)
         ]
-        self.assertCountEqual([entry["session"] for entry in finished], ["active", "queued"])
+        self.assertCountEqual(
+            [entry["session"] for entry in finished], ["active", "queued", "waiting-for-space"]
+        )
         self.assertTrue(all(entry["code"] == "closed" for entry in finished))
+        self.assertEqual(self.engine.queue.qsize(), 0)

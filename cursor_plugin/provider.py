@@ -5,6 +5,8 @@
 import asyncio
 import hashlib
 import secrets
+import time
+import uuid
 
 from astrbot.api.event import MessageChain
 from astrbot.api.provider import LLMResponse, Provider
@@ -12,6 +14,7 @@ from astrbot.core.provider.register import provider_cls_map, register_provider_a
 
 from . import runtime
 from .errors import CursorError, UnsupportedFeatureError, retry_stream_errors
+from .metrics import record
 from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
@@ -67,6 +70,8 @@ class CursorCLIProvider(Provider):
 
     async def get_models(self):
         # ACP catalog only; no model prompt or automatic model selection.
+        if self._closed or self.engine.closed:
+            raise CursorError("closed")
         return await runtime.available_model_ids()
 
     async def text_chat(
@@ -128,29 +133,7 @@ class CursorCLIProvider(Provider):
         request_sequence,
         request_max_retries=None,
     ):
-        if self._closed:
-            raise CursorError("closed")
-        has_tools = func_tool is not None and (
-            not func_tool.empty()
-            if callable(getattr(func_tool, "empty", None))
-            else bool(func_tool)
-        )
-        if image_urls:
-            raise UnsupportedFeatureError("image")
-        if audio_urls:
-            raise UnsupportedFeatureError("audio")
-        if has_tools or tool_calls_result or tool_choice == "required":
-            raise UnsupportedFeatureError("tool_calls")
-        chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
-        if chosen != self.settings["model"]:
-            raise CursorError("model")
-        messages = normalize_messages(
-            prompt,
-            contexts,
-            system_prompt,
-            extra_user_content_parts,
-            max_bytes=self.settings["context_max_bytes"],
-        )
+        started = time.monotonic()
         event = None
         try:
             from astrbot.core.platform.astr_message_event import current_message_event
@@ -166,6 +149,43 @@ class CursorCLIProvider(Provider):
             raw = f"{self.provider_config.get('id', '')}\0{origin}\0{stable}"
             scope = hashlib.blake2s(raw.encode(), key=_SESSION_SALT, digest_size=16).hexdigest()
             stats_session = runtime.usage_session(raw)
+
+        try:
+            if self._closed or self.engine.closed:
+                raise CursorError("closed")
+            has_tools = func_tool is not None and (
+                not func_tool.empty()
+                if callable(getattr(func_tool, "empty", None))
+                else bool(func_tool)
+            )
+            if image_urls:
+                raise UnsupportedFeatureError("image")
+            if audio_urls:
+                raise UnsupportedFeatureError("audio")
+            if has_tools or tool_calls_result or tool_choice == "required":
+                raise UnsupportedFeatureError("tool_calls")
+            chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
+            if chosen != self.settings["model"]:
+                raise CursorError("model")
+            messages = normalize_messages(
+                prompt,
+                contexts,
+                system_prompt,
+                extra_user_content_parts,
+                max_bytes=self.settings["context_max_bytes"],
+            )
+        except CursorError as exc:
+            if exc.code != "closed":
+                self.engine.last_failure = exc.code
+            record(
+                "request_finished",
+                request_id=uuid.uuid4().hex,
+                session=stats_session or scope,
+                code=exc.code,
+                duration_ms=round((time.monotonic() - started) * 1000),
+                reset_reason="preflight",
+            )
+            raise
 
         async def on_queued(depth):
             if event is not None:
@@ -184,6 +204,12 @@ class CursorCLIProvider(Provider):
             self._pending.add(task)
             try:
                 return await task
+            except asyncio.CancelledError:
+                # Cancelling the provider's child during unload is a failed request.
+                # An actual cancellation of the caller must still propagate.
+                if self._closed and not asyncio.current_task().cancelling():
+                    raise CursorError("closed") from None
+                raise
             finally:
                 self._pending.discard(task)
 

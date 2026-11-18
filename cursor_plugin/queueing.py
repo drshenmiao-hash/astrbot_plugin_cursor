@@ -19,8 +19,16 @@ class RequestQueue:
 
     async def put(self, job):
         async with self.condition:
-            await self.condition.wait_for(lambda: len(self.pending) < self.maxsize)
-            self.pending.append(job)
+            await self.condition.wait_for(
+                lambda: job.cancel.is_set() or len(self.pending) < self.maxsize
+            )
+            if not job.cancel.is_set():
+                self.pending.append(job)
+                self.condition.notify_all()
+
+    async def clear(self):
+        async with self.condition:
+            self.pending.clear()
             self.condition.notify_all()
 
     async def discard(self, job):

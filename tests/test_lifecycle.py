@@ -125,11 +125,17 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_plugin_exit_does_not_delete_host_owned_models(self):
         await self.plugin.initialize()
+        cursor = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
+        self.manager.inst_map[self.model["id"]] = cursor
         before = self.manager.inst_map.copy()
         await self.plugin.terminate()
         self.assertEqual(self.manager.inst_map, before)
         self.assertIs(self.manager.curr_provider_inst, self.manager.oauth)
         self.assertFalse(self.plugin._usage_page.active)
+        self.assertTrue(cursor.engine.closed)
+        with self.assertRaises(main.CursorError) as stopped:
+            await cursor.text_chat(prompt="stopped")
+        self.assertEqual(stopped.exception.code, "closed")
 
     async def test_reloading_plugin_replaces_registered_usage_route(self):
         await self.plugin.initialize()
@@ -152,7 +158,11 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             store = main.runtime.UsageStore(directory)
             try:
                 store.record({"event": "request_finished", "request_id": "prior", "code": "ok"})
-                with patch.object(main.runtime, "_usage_store", store):
+                metrics = importlib.import_module(main.runtime.__package__ + ".metrics")
+                with (
+                    patch.object(main.runtime, "_usage_store", store),
+                    patch.object(metrics, "_usage_store", store),
+                ):
                     with patch.object(
                         main.runtime,
                         "_fetch_available_models",
@@ -166,10 +176,10 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(self.plugin._usage_page.active)
                         with self.assertRaises(main.CursorError) as chat:
                             await old.text_chat(prompt="测试")
-                        self.assertEqual(chat.exception.code, "not_logged_in")
+                        self.assertEqual(chat.exception.code, "closed")
                         with self.assertRaises(main.CursorError) as catalog:
                             await old.get_models()
-                        self.assertEqual(catalog.exception.code, "not_logged_in")
+                        self.assertEqual(catalog.exception.code, "closed")
                         fetch.assert_awaited_once()
                         self.assertEqual(old.engine.workers, [])
                         self.assertEqual(self.config, before)
@@ -178,7 +188,8 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     report = await main.runtime.usage_dashboard(7)
                     self.assertIsNone(report["startup_error"])
                     self.assertTrue(report["validated"])
-                    self.assertEqual(report["totals"]["requests"], 1)
+                    self.assertEqual(report["totals"]["requests"], 2)
+                    self.assertEqual(report["totals"]["failed"], 1)
             finally:
                 store.close()
 
@@ -199,3 +210,30 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(failed.exception.code, expected)
                 self.assertEqual(self.manager.reloads, [])
         await self.plugin.initialize()
+
+    async def test_oversize_request_records_failure_without_entering_engine(self):
+        await self.plugin.initialize()
+        cursor = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
+        self.addAsyncCleanup(cursor.terminate)
+        cursor.settings["context_max_bytes"] = 1024
+        with tempfile.TemporaryDirectory() as directory:
+            store = main.runtime.UsageStore(directory)
+            try:
+                metrics = importlib.import_module(main.runtime.__package__ + ".metrics")
+                with (
+                    patch.object(main.runtime, "_usage_store", store),
+                    patch.object(metrics, "_usage_store", store),
+                    patch.object(cursor.engine, "submit", new_callable=AsyncMock) as submit,
+                ):
+                    with self.assertRaises(main.CursorError) as limit:
+                        await cursor.text_chat(prompt="x" * 2048, session_id="test-anonymous-label")
+                    self.assertEqual(limit.exception.code, "context_limit")
+                    report = await main.runtime.usage_dashboard(7)
+                submit.assert_not_awaited()
+                self.assertEqual(report["totals"]["failed"], 1)
+                self.assertEqual(report["totals"]["wire_bytes"], 0)
+                self.assertEqual(report["groups"]["model"][0]["label"], "")
+                self.assertEqual(report["groups"]["code"][0]["label"], "context_limit")
+                self.assertEqual(report["runtime"]["last_failure"], "context_limit")
+            finally:
+                store.close()

@@ -15,7 +15,7 @@ from .cursor_plugin.web import UsagePage
 __all__ = ["CursorCLIPlugin", "CursorCLIProvider"]
 
 
-@register("astrbot_plugin_cursor", "drshenmiao-hash", "Cursor CLI 常驻聊天 Provider", "0.3.1")
+@register("astrbot_plugin_cursor", "drshenmiao-hash", "Cursor CLI 常驻聊天 Provider", "0.3.2")
 class CursorCLIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -24,6 +24,8 @@ class CursorCLIPlugin(Star):
         self._usage_page = UsagePage()
 
     async def initialize(self):
+        # Also stops providers retained when upgrading from a version whose teardown only closed the page.
+        await runtime.stop_providers(self.context)
         try:
             await runtime.initialize(self.context)
         except CursorError as exc:
@@ -34,13 +36,14 @@ class CursorCLIPlugin(Star):
 
     async def terminate(self):
         self._usage_page.close()
+        await runtime.stop_providers(self.context)
 
     @filter.command("cursor_source")
     async def cursor_source(self, event: AstrMessageEvent):
         """Show this version's license and corresponding source."""
         yield event.plain_result(
-            "astrbot_plugin_cursor v0.3.1 · AGPL-3.0\n"
-            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/v0.3.1"
+            "astrbot_plugin_cursor v0.3.2 · AGPL-3.0\n"
+            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/v0.3.2"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)

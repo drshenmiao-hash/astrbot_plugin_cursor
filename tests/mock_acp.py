@@ -30,19 +30,23 @@ async def main():
                 await asyncio.sleep(10)
             else:
                 await asyncio.sleep(0.05)
-            send(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "session/update",
-                    "params": {
-                        "sessionId": sid,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": "OK"},
+            chunks = ["OK"]
+            if "MOCK_STREAM_FAILURE" in text:
+                chunks = ["部分正常回复。", "Error: RetriableError: [unavailable] PING timed out"]
+            for chunk in chunks:
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": sid,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": chunk},
+                            },
                         },
-                    },
-                }
-            )
+                    }
+                )
             result(request, {"stopReason": "end_turn"})
         except asyncio.CancelledError:
             result(request, {"stopReason": "cancelled"})

@@ -131,13 +131,18 @@ class StreamPeer(ACPClient):
         sid = params["sessionId"]
         self.turns[sid]["wire_bytes"] = len(json.dumps(params).encode())
         # Simulate chunks followed by a misleading successful end_turn.
-        for start in range(0, len(text), 7):
+        chunks = (
+            [text[start : start + 7] for start in range(0, len(text), 7)]
+            if isinstance(text, str)
+            else text
+        )
+        for chunk in chunks:
             self._update(
                 {
                     "sessionId": sid,
                     "update": {
                         "sessionUpdate": "agent_message_chunk",
-                        "content": {"type": "text", "text": text[start : start + 7]},
+                        "content": {"type": "text", "text": chunk},
                     },
                 }
             )
@@ -231,10 +236,10 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ping_timeout", "\n".join(logs.output))
         self.assertNotIn(PING, "\n".join(logs.output))
 
-    async def test_zero_retry_setting_is_honored(self):
+    async def test_one_total_attempt_means_no_retry(self):
         peer = self.peer([STALL, "不应调用"])
         with self.assertLogs("astrbot", level="WARNING"), self.assertRaises(CursorStreamError):
-            await retry_stream_errors(self.request, request_max_retries=0)
+            await retry_stream_errors(self.request, request_max_retries=1)
         self.assertEqual(peer.prompt_count, 1)
         self.assertEqual(self.finished()[0]["code"], "connection_stalled")
 
@@ -261,6 +266,22 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
             await self.request()
         self.assertEqual(caught.exception.code, "ping_timeout")
         self.assertEqual(self.finished()[-1]["code"], "ping_timeout")
+
+    async def test_machine_tail_at_chunk_boundary_is_discarded_without_newline(self):
+        self.engine.cfg.update(max_concurrency=1, queue_timeout_seconds=1)
+        for chunks in (
+            ["部分回复。", PING],
+            ["部分回复。", " Error: Retri", "ableError: Connection stalled"],
+        ):
+            with self.subTest(chunks=chunks):
+                self.peer([chunks])
+                with self.assertRaises(CursorStreamError):
+                    await self.request()
+                self.assertIn(self.finished()[-1]["code"], {"ping_timeout", "connection_stalled"})
+        chunks = ["该日志是 `", PING, "`。"]
+        self.peer([chunks])
+        self.assertEqual(await self.request(), "".join(chunks))
+        self.assertEqual(self.finished()[-1]["code"], "ok")
 
     async def test_unrelated_failure_and_cancellation_are_not_retried(self):
         for error in [CursorError("quota_exhausted"), asyncio.CancelledError()]:

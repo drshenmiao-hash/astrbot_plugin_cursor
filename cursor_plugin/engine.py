@@ -100,7 +100,8 @@ class Engine:
         notice = asyncio.create_task(queue_notice())
         try:
             await asyncio.wait_for(self.queue.put(job), max(0.001, job.deadline - time.monotonic()))
-            record("queued", request_id=job.request_id, queue_depth=self.queue.qsize())
+            if not job.cancel.is_set():
+                record("queued", request_id=job.request_id, queue_depth=self.queue.qsize())
             await asyncio.wait_for(job.started.wait(), max(0.001, job.deadline - time.monotonic()))
             return await job.future
         except asyncio.TimeoutError:
@@ -379,7 +380,8 @@ class Engine:
                 self._account(job, code)
                 if not job.future.done():
                     if error is not None:
-                        job.future.set_exception(error)
+                        # The caller must not receive a traceback into the still-running worker.
+                        job.future.set_exception(error.with_traceback(None))
                     elif result is not None:
                         job.future.set_result(result)
                     else:
@@ -424,6 +426,8 @@ class Engine:
         }
 
     async def close(self):
+        if self.closed:
+            return
         self.closed = True
         jobs = list(self._jobs.values())
         for job in jobs:
@@ -433,6 +437,7 @@ class Engine:
                 job.future.set_exception(CursorError("closed"))
         for worker in self.workers:
             worker.cancel()
+        await self.queue.clear()
         await asyncio.gather(*self.workers, return_exceptions=True)
         self.workers.clear()
         for job in jobs:

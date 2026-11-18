@@ -210,6 +210,21 @@ async def release_engine(engine):
             _engine = None
 
 
+async def stop_providers(context):
+    manager = getattr(context, "provider_manager", None)
+    providers = [
+        instance
+        for instance in getattr(manager, "inst_map", {}).values()
+        if getattr(instance, "_astrbot_cursor_plugin", False) is True
+    ]
+    # Close each shared engine first so pending callers receive a request error.
+    # The marker survives AstrBot dropping the old module during a hot reload.
+    for engine in {provider.engine for provider in providers}:
+        await engine.close()
+    for provider in providers:
+        await provider.terminate()
+
+
 def engine_health():
     return (
         _engine.health()

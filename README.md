@@ -2,7 +2,7 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> v0.3.1 预发布版修复了启动失败时无法读取用量、排队超时后最近失败未更新的问题。请下载源码 ZIP，在 AstrBot 插件页上传并重载。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.1)
+> v0.3.2 预发布版修复了 Cursor Provider 的重载、禁用、重试和断流处理。请下载源码 ZIP，在 AstrBot 插件页上传。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.2 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.2)
 
 此预发布版来自 `fix/persistent-cli-provider`。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 
@@ -86,6 +86,9 @@ python -m unittest tests.test_models tests.test_registration tests.test_history_
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock
 
+# 在临时 AstrBot 4.29.4 实例中验证重载、禁用和备用模型，使用模拟 ACP
+python -m tests.check_astrbot_lifecycle
+
 # 真实环境，会发起模型请求并可能计费
 python tests/check_environment.py --config /path/to/plugin-config.json --allow-model-requests
 
@@ -97,7 +100,7 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 
 ## 环境与来源
 
-接口目标为 AstrBot 4.29.4；Python 3.10+。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离；容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
+接口目标为 AstrBot 4.29.4（Python 3.12+）。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离，容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
 
 Provider 注册和重载改编自 [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)，来源见 [NOTICE](NOTICE)。使用官方 [Cursor ACP](https://cursor.com/docs/cli/acp) 协议；不修改 AstrBot 核心，不搭建 OpenAI 兼容 HTTP 桥接。
 

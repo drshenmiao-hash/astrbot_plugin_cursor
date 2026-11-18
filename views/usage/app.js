@@ -10,6 +10,7 @@ const codes = {
   quota_exhausted: "额度不足",
   rate_limited: "触发限流",
   queue_timeout: "排队超时",
+  context_limit: "上下文超限",
   startup_timeout: "启动超时",
   timeout: "响应超时",
   connection_stalled: "连接停滞",
