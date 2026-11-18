@@ -56,6 +56,7 @@ class Engine:
         self._start_lock = asyncio.Lock()
         self._jobs = {}
         self.last_failure = None
+        self._runner_busy_until = 0.0
 
     async def _start_workers(self):
         async with self._start_lock:
@@ -189,11 +190,17 @@ class Engine:
             await owner.close()
         record("runtime_reset", reset_reason=reason)
 
-    async def available_models(self):
+    async def available_models(self, *, reuse_only=False):
         """One ACP session/new catalog query; never send a model prompt."""
         async with self._condition:
             if self.closed:
                 raise CursorError("closed")
+            if reuse_only and (
+                self.client is None
+                or self.client.closed
+                or self.session_slots >= self.cfg["max_sessions"]
+            ):
+                raise CursorError("runner_in_use")
             rotate = self.client is not None and (
                 self.client.closed or self.session_slots >= self.cfg["max_sessions"]
             )
@@ -225,12 +232,30 @@ class Engine:
                     await self._reset_client("session_limit" if exhausted else "process_exited")
                     job.process_reused = False
                 if self.client is None:
-                    await self._new_client()
+                    await self._start_chat_client(job.deadline)
                 cached, _ = self._reuse(job.messages, job.scope)
                 if cached is None:
                     self.session_slots += 1
                 self.active += 1
                 return self.client
+
+    async def _start_chat_client(self, deadline):
+        # All chat workers enter through _lease's condition. Share a short cooldown
+        # after an unsuccessful batch instead of opening SSH again for every waiter.
+        if time.monotonic() < self._runner_busy_until:
+            raise CursorError("runner_in_use")
+        for delay in (0.25, 0.75, None):
+            try:
+                await self._new_client()
+                return
+            except CursorError as exc:
+                if exc.code != "runner_in_use":
+                    raise
+                now = time.monotonic()
+                if delay is None or now + delay >= deadline:
+                    self._runner_busy_until = now + 2.0
+                    raise
+                await asyncio.sleep(delay)
 
     async def _release(self):
         async with self._condition:

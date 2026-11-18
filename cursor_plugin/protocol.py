@@ -6,6 +6,9 @@ import re
 from .errors import CursorError
 
 VERSION = 1
+RUNNER_CLEANUP_PROTOCOL = 1
+# Reserved SSH exit status returned only after the runner exits its lock scope.
+RUNNER_CLEANUP_CONFIRMED = 42
 MAX_INPUT = 512 * 1024
 MAX_CONTEXT = 256 * 1024
 MAX_OUTPUT = 2 * 1024 * 1024

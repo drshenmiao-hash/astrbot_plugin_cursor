@@ -93,6 +93,8 @@ AstrBot 环境需有 OpenSSH 客户端；缺少时用 `deploy/Dockerfile.astrbot
 
 配置 `transport=ssh`、`ssh_host=cursor-cli`、`ssh_port=2222`，使用默认专用私钥及 known_hosts 路径。修改主机名/端口时同步 known_hosts，保留主机校验。只需在插件填写模型，原生模型使用自动解析出的 ACP ID。
 
+含清理回执的开发版本要求插件和运行器使用同一份源码。可先用 `/cursor_doctor` 检查 `runner_cleanup_protocol`。旧运行器会报 `runner_cleanup_unsupported`。独立校验结束后，只有运行器确认本次 ACP 子进程树已退出并释放锁，插件才发布校验结果。传输中断或回执超时会报 `cleanup_unverified`，可安全检查远端状态后再重载。
+
 SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。诊断分别返回客户端密钥、主机校验、SSH 版本、登录卷和 CLI 构建入口哈希。入口哈希校验不是对整个 Docker 镜像 digest 的远程证明。
 
 ## 安装插件与检查

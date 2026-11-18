@@ -37,6 +37,8 @@ MESSAGES = {
     "cancel_unconfirmed": "远端取消未确认，已关闭连接；请核对用量。",
     "closed": "Cursor Provider 已停止。",
     "cleanup_timeout": "Cursor 进程清理未在期限内完成。",
+    "cleanup_unverified": "未收到 Cursor 运行器清理回执，无法确认远端进程和锁已释放。",
+    "runner_cleanup_unsupported": "当前 Cursor 运行器未提供清理回执，请使用与插件配套的运行器版本。",
     "auth_persist": "Cursor 登录刷新结果未能保存。",
     "ssh_missing": "缺少 OpenSSH 客户端。",
     "ssh_key_missing": "缺少专用 SSH 客户端私钥。",

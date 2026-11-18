@@ -221,16 +221,24 @@ async def _fetch_available_models():
     if (
         _engine is not None
         and not _engine.closed
+        and _engine.client is not None
+        and not _engine.client.closed
         and all(_engine.cfg.get(key) == _settings.get(key) for key in connection_keys)
     ):
         return await asyncio.wait_for(
-            _engine.available_models(), _settings["queue_timeout_seconds"]
+            _engine.available_models(reuse_only=True), _settings["queue_timeout_seconds"]
         )
     probe = Engine(settings())
     try:
         return await asyncio.wait_for(probe.available_models(), _settings["queue_timeout_seconds"])
     finally:
-        await probe.close()
+        closing = asyncio.create_task(probe.close())
+        try:
+            await asyncio.shield(closing)
+        except asyncio.CancelledError:
+            # A reload may cancel validation while a successful catalog is already closing.
+            await closing
+            raise
 
 
 async def validate_configured_model():

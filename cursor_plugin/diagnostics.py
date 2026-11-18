@@ -13,6 +13,7 @@ from .errors import CursorError
 from .launcher import bwrap_argv, local_bundle, ssh_argv, ssh_error_code
 from .metrics import record
 from .process import run_process
+from .protocol import RUNNER_CLEANUP_PROTOCOL
 from .settings import settings_from
 
 
@@ -100,6 +101,12 @@ async def diagnose(cfg, *, include_raw=False):
                     expected = {"cli_executable", "login_volume", "cli_version", "image_sha"}
                     if not isinstance(data, dict) or not expected <= data.keys():
                         raise CursorError("protocol")
+                    capability = data.get("cleanup_protocol")
+                    report["runner_cleanup_protocol"] = (
+                        "ok"
+                        if type(capability) is int and capability == RUNNER_CLEANUP_PROTOCOL
+                        else "runner_cleanup_unsupported"
+                    )
                     for name in expected:
                         value = data[name]
                         # Only protocol codes or simple build versions can be displayed.
