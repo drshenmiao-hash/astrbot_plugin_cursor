@@ -260,6 +260,14 @@ class Engine:
 
     async def _execute(self, job, client):
         cached, plan = self._reuse(job.messages, job.scope)
+        if job.scope in self.sessions:
+            record(
+                "history_comparison",
+                **{
+                    key: plan[key]
+                    for key in ("length_rule", "hash_rule", "tail_rule", "system_changed")
+                },
+            )
         if not plan["has_new_user_input"]:
             return self._no_new_input(job, cached)
         delta = plan["delta"]

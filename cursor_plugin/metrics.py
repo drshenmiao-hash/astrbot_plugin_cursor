@@ -25,6 +25,13 @@ _FIELDS = {
     "version",
     "sequence",
     "model_id",
+    "has_conversation_id",
+    "has_session_id",
+    "has_message_event",
+    "length_rule",
+    "hash_rule",
+    "tail_rule",
+    "system_changed",
 }
 
 

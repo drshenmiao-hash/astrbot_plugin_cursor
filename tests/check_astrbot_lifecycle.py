@@ -10,8 +10,10 @@ import os
 import shutil
 import sys
 import tempfile
+from copy import deepcopy
 from functools import partial
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from tests.mock_runtime import MockOwner
@@ -22,10 +24,11 @@ PREFIX = f"data.plugins.{PLUGIN}.cursor_plugin"
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def run_chat(provider, prompt, *, max_attempts=1):
+async def run_chat(provider, prompt, *, max_attempts=1, cid=None, history=None, system=None):
     from astrbot.core.agent.hooks import BaseAgentRunHooks
     from astrbot.core.agent.run_context import ContextWrapper
     from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
+    from astrbot.core.db.po import Conversation
     from astrbot.core.provider.entities import LLMResponse, ProviderRequest
     from astrbot.core.provider.provider import Provider
 
@@ -38,7 +41,12 @@ async def run_chat(provider, prompt, *, max_attempts=1):
     runner = ToolLoopAgentRunner()
     await runner.reset(
         provider=provider,
-        request=ProviderRequest(prompt=prompt),
+        request=ProviderRequest(
+            prompt=prompt,
+            conversation=Conversation("mock-platform", "mock-user", cid) if cid else None,
+            contexts=history or [],
+            system_prompt=system,
+        ),
         run_context=ContextWrapper(context=None),
         tool_executor=MagicMock(),
         agent_hooks=BaseAgentRunHooks(),
@@ -49,6 +57,35 @@ async def run_chat(provider, prompt, *, max_attempts=1):
         response.completion_text async for response in runner._iter_llm_responses_with_fallback()
     ]
     return replies, backup.text_chat.await_count
+
+
+async def verify_sessions(provider):
+    original = [{"role": "user", "content": "第一个问题"}, {"role": "assistant", "content": "OK"}]
+    assert await run_chat(provider, "第一个问题", cid="chat-a", system="原人格") == (["OK"], 0)
+    cache = provider.engine.sessions
+    key = next(iter(cache))
+    first_session = cache[key]["session_id"]
+
+    await provider.text_chat(prompt="后台总结", system_prompt="总结任务")
+    assert cache[key]["session_id"] == first_session and len(cache) == 1
+    assert await run_chat(
+        provider, "第二个问题", cid="chat-a", history=original, system="新人格"
+    ) == (["OK"], 0)
+    assert cache[key]["session_id"] == first_session
+    assert cache[key]["history"]["systems"][0]["content"] == "新人格"
+
+    assert await run_chat(provider, "另一段对话", cid="chat-b") == (["OK"], 0)
+    assert len(cache) == 2
+    assert len({entry["session_id"] for entry in cache.values()}) == 2
+    revised = [{"role": "user", "content": "历史被改写"}, original[1]]
+    assert await run_chat(provider, "继续", cid="chat-a", history=revised, system="新人格") == (
+        ["OK"],
+        0,
+    )
+    assert cache[key]["session_id"] != first_session
+    print(
+        "PASS native conversation_id enables reuse; persona updates incrementally; different chats and unscoped work stay separate; history edits rebuild"
+    )
 
 
 async def verify(root):
@@ -159,6 +196,82 @@ async def verify(root):
             await plugins.turn_on_plugin(PLUGIN)
         assert await run_chat(manager.inst_map[MODEL], "重新启用") == (["OK"], 0)
         print("PASS disabling stops the provider process; enabling restores normal chat")
+
+        original_instance = manager.inst_map[MODEL]
+        old_process = original_instance.engine.owner.process
+        config_keys = ("agent", "provider_settings")
+        selection = {key: deepcopy(host.astrbot_config.get(key)) for key in config_keys}
+        probes = []
+
+        async def import_with_busy_runner(**kwargs):
+            module = await import_with_mock_owner(**kwargs)
+            if kwargs.get("root_dir_name") == PLUGIN:
+                recovered = module.runtime
+                recovered._STARTUP_BACKOFF = (0.01, 0.02)
+                real_probe = recovered._fetch_available_models
+
+                async def probe():
+                    assert old_process.returncode is not None
+                    probes.append(None)
+                    if len(probes) <= 3:
+                        raise module.CursorError("runner_in_use")
+                    await asyncio.sleep(0.02)
+                    return await real_probe()
+
+                recovered._fetch_available_models = probe
+            return module
+
+        with patch.object(
+            plugins, "_import_plugin_with_dependency_recovery", side_effect=import_with_busy_runner
+        ):
+            success, error = await plugins.reload(PLUGIN)
+        assert success, error
+        pending_provider = manager.inst_map[MODEL]
+        assert pending_provider is not original_instance and pending_provider.engine is None
+        recovering_runtime = importlib.import_module(PREFIX + ".runtime")
+        assert (await recovering_runtime.usage_dashboard(7))["startup_error"][
+            "code"
+        ] == "runner_in_use"
+        assert len(probes) == 3
+
+        from astrbot.core.platform.astr_message_event import current_message_event
+
+        extras = {}
+        event = SimpleNamespace(
+            unified_msg_origin="mock-origin",
+            get_extra=extras.get,
+            set_extra=extras.__setitem__,
+            send=AsyncMock(),
+        )
+        before = recovering_runtime._usage_store.summary()["rows"][0]
+        token = current_message_event.set(event)
+        try:
+            assert await run_chat(pending_provider, "启动忙", cid="busy-chat") == (["BACKUP"], 1)
+        finally:
+            current_message_event.reset(token)
+        event.send.assert_awaited_once()
+        notice = event.send.await_args.args[0].chain[0].text
+        assert "runner_in_use" in notice and "mock-backup" not in notice
+        after = recovering_runtime._usage_store.summary()["rows"][0]
+        assert after["requests"] - before["requests"] == 1
+        assert after["success"] == before["success"]
+        assert after["codes"].get("runner_in_use", 0) - before["codes"].get("runner_in_use", 0) == 1
+        assert len(probes) == 3
+        print(
+            "PASS startup busy is capped; chat fallback emits a factual notice and counts the rejected request once"
+        )
+
+        recovering_runtime._retry_validation_after = 0
+        responses = await asyncio.gather(
+            *(run_chat(pending_provider, f"恢复测试 {i}") for i in range(4))
+        )
+        assert responses == [(["OK"], 0)] * 4 and len(probes) == 4
+        assert (await recovering_runtime.usage_dashboard(7))["startup_error"] is None
+        assert {key: host.astrbot_config.get(key) for key in config_keys} == selection
+        print(
+            "PASS concurrent chats share one real simulated ACP catalog revalidation and recover without a reload"
+        )
+        await verify_sessions(pending_provider)
     finally:
         await host.stop()
 

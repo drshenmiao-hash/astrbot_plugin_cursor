@@ -36,6 +36,7 @@ class CursorCLIPlugin(Star):
 
     async def terminate(self):
         self._usage_page.close()
+        await runtime.stop_validation()
         await runtime.stop_providers(self.context)
 
     @filter.command("cursor_source")

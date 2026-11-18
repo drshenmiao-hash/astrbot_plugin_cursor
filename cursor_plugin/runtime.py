@@ -4,6 +4,7 @@
 
 import asyncio
 import logging
+import time
 from copy import deepcopy
 
 from .engine import Engine
@@ -20,6 +21,22 @@ _engine = None
 _available_models = None
 _usage_store = None
 _startup_failure = None
+_validation_task = None
+_retry_validation_after = 0.0
+_validation_stopped = False
+_STARTUP_BACKOFF = (0.5, 2.0)
+_RECOVERY_COOLDOWN = 15.0
+_TRANSIENT_VALIDATION_ERRORS = {
+    "runner_in_use",
+    "transport",
+    "ssh_unreachable",
+    "startup_timeout",
+    "timeout",
+    "process_exited",
+    "connection_stalled",
+    "ping_timeout",
+    "upstream_retryable",
+}
 
 
 def configure_usage(context, *, directory=None):
@@ -88,10 +105,18 @@ async def usage_dashboard(days):
 
 
 def configure(config):
-    global _settings, _available_models
+    global \
+        _settings, \
+        _available_models, \
+        _startup_failure, \
+        _validation_stopped, \
+        _retry_validation_after
     _settings = settings_from(config)
     _settings["model"] = ""  # Never publish an unvalidated management/display ID.
     _available_models = None
+    _startup_failure = None
+    _validation_stopped = False
+    _retry_validation_after = 0.0
     try:
         from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
@@ -102,13 +127,81 @@ def configure(config):
 
 def record_startup_failure(code):
     global _startup_failure
-    _startup_failure = code
-    logger.warning("cursor_provider_startup code=%s", code)
+    if _startup_failure != code:
+        _startup_failure = code
+        logger.warning("cursor_provider_startup code=%s", code)
 
 
 def _check_startup():
+    if _validation_stopped:
+        raise CursorError("closed")
     if _startup_failure:
         raise CursorError(_startup_failure)
+
+
+async def _run_validation(backoff):
+    global _validation_task, _startup_failure, _retry_validation_after
+    try:
+        for attempt, delay in enumerate((0.0, *backoff), 1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await validate_configured_model()
+            except CursorError as exc:
+                error = exc
+            except asyncio.TimeoutError:
+                error = CursorError("startup_timeout")
+            else:
+                _startup_failure = None
+                _retry_validation_after = 0.0
+                return None
+            code = error.code
+            logger.warning("cursor_model_validation code=%s attempt=%d", code, attempt)
+            if code not in _TRANSIENT_VALIDATION_ERRORS:
+                break
+        record_startup_failure(code)
+        _retry_validation_after = time.monotonic() + _RECOVERY_COOLDOWN
+        return error.with_traceback(None)
+    finally:
+        _validation_task = None
+
+
+async def ensure_model_validated(*, startup=False):
+    """Share an ACP probe across callers. Only startup uses the backoff sequence."""
+    global _validation_task
+    if _validation_stopped:
+        raise CursorError("closed")
+    if _validation_task is None:
+        if not startup and _startup_failure:
+            if (
+                _startup_failure not in _TRANSIENT_VALIDATION_ERRORS
+                or time.monotonic() < _retry_validation_after
+            ):
+                raise CursorError(_startup_failure)
+        elif not startup and _available_models is not None:
+            return
+        _validation_task = asyncio.create_task(_run_validation(_STARTUP_BACKOFF if startup else ()))
+    try:
+        error = await asyncio.shield(_validation_task)
+    except asyncio.CancelledError:
+        if _validation_stopped and not asyncio.current_task().cancelling():
+            raise CursorError("closed") from None
+        raise
+    if isinstance(error, ModelResolutionError):
+        raise ModelResolutionError(error.code, error.available_model_ids, error.candidates)
+    if error is not None:
+        raise CursorError(error.code)
+
+
+async def stop_validation():
+    global _validation_stopped, _validation_task
+    _validation_stopped = True
+    task = _validation_task
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if _validation_task is task:
+            _validation_task = None
 
 
 async def _fetch_available_models():
@@ -150,7 +243,7 @@ async def validate_configured_model():
         return None
     _available_models = None
     _available_models = await _fetch_available_models()
-    resolved = resolve_model_id(requested)
+    resolved = _resolve_catalog_model(requested)
     _settings["model"] = resolved
     logger.info("Cursor model_id 已通过 ACP 校验，实际 modelId=%s", resolved)
     return resolved
@@ -158,6 +251,10 @@ async def validate_configured_model():
 
 def resolve_model_id(requested):
     _check_startup()
+    return _resolve_catalog_model(requested)
+
+
+def _resolve_catalog_model(requested):
     if _available_models is None:
         raise CursorError("model_not_validated")
     try:
@@ -169,9 +266,7 @@ def resolve_model_id(requested):
 
 
 async def available_model_ids():
-    _check_startup()
-    if _available_models is None:
-        await validate_configured_model()
+    await ensure_model_validated()
     return [
         model_id
         for model_id in catalog_ids(_available_models)
@@ -219,7 +314,7 @@ async def stop_providers(context):
     ]
     # Close each shared engine first so pending callers receive a request error.
     # The marker survives AstrBot dropping the old module during a hot reload.
-    for engine in {provider.engine for provider in providers}:
+    for engine in {provider.engine for provider in providers if provider.engine is not None}:
         await engine.close()
     for provider in providers:
         await provider.terminate()
@@ -350,11 +445,23 @@ async def ensure_default_source_and_model(config):
 
 async def initialize(context):
     """Ensure native config, then refresh instances with the OAuth plugin's lifecycle."""
-    global _startup_failure
+    global _startup_failure, _validation_stopped
     _startup_failure = None
+    _validation_stopped = False
     config = context.astrbot_config_mgr.default_conf
-    await validate_configured_model()
+    try:
+        await ensure_model_validated(startup=True)
+    except CursorError:
+        # A retained, already closed adapter still points at the retired Python module.
+        # Rebind it to this runtime so its next request can use the recovery gate.
+        await _reload_host_models(context, None, stopped_only=True)
+        raise
     target_id = await ensure_default_source_and_model(config)
+    await _reload_host_models(context, target_id)
+
+
+async def _reload_host_models(context, target_id, *, stopped_only=False):
+    config = context.astrbot_config_mgr.default_conf
     manager = getattr(context, "provider_manager", None)
     if manager is None:
         return
@@ -380,6 +487,11 @@ async def initialize(context):
             should_load = model["id"] in instances or (
                 running and model["id"] == target_id and model.get("enable", True)
             )
+            if stopped_only:
+                instance = instances.get(model["id"])
+                should_load = getattr(
+                    instance, "_astrbot_cursor_plugin", False
+                ) is True and getattr(instance, "_closed", False)
             if not own_model or not should_load:
                 continue
             from .provider import CursorCLIProvider

@@ -52,7 +52,7 @@ class CursorCLIProvider(Provider):
         super().__init__(config, provider_settings)
         cfg = runtime.settings()
         self.set_model(provider_config.get("model") or cfg["model"])
-        self.engine = runtime.acquire_engine()
+        self.engine = runtime.acquire_engine() if cfg["model"] else None
         self.settings = cfg
         self._pending = set()
         self._closed = False
@@ -70,7 +70,7 @@ class CursorCLIProvider(Provider):
 
     async def get_models(self):
         # ACP catalog only; no model prompt or automatic model selection.
-        if self._closed or self.engine.closed:
+        if self._closed or (self.engine is not None and self.engine.closed):
             raise CursorError("closed")
         return await runtime.available_model_ids()
 
@@ -90,6 +90,14 @@ class CursorCLIProvider(Provider):
         request_max_retries=None,
         **kwargs,
     ):
+        event = None
+        try:
+            from astrbot.core.platform.astr_message_event import current_message_event
+
+            event = current_message_event.get()
+        except (ImportError, LookupError):
+            pass
+        conversation_id = kwargs.get("conversation_id")
         try:
             return await self._complete_text(
                 prompt=prompt,
@@ -103,17 +111,38 @@ class CursorCLIProvider(Provider):
                 extra_user_content_parts=extra_user_content_parts,
                 tool_choice=tool_choice,
                 session_id=session_id,
-                conversation_id=kwargs.get("conversation_id"),
+                conversation_id=conversation_id,
                 request_sequence=kwargs.get("request_sequence"),
                 request_max_retries=request_max_retries,
+                event=event,
             )
         except asyncio.CancelledError:
             raise
-        except CursorError:
+        except CursorError as exc:
+            if event is not None and isinstance(conversation_id, str) and conversation_id:
+                await self._notify_failure(event, exc.code)
             raise
         except Exception:
             # Also sanitize failures while serializing framework content objects.
             raise CursorError("cli_failed") from None
+
+    @staticmethod
+    async def _notify_failure(event, code):
+        key = "_astrbot_cursor_failure_notice"
+        try:
+            if event.get_extra(key):
+                return
+            event.set_extra(key, True)
+            await asyncio.wait_for(
+                event.send(
+                    MessageChain().message(
+                        f"Cursor 本次未能回复（{code}），后续响应由 AstrBot 处理。"
+                    )
+                ),
+                timeout=2,
+            )
+        except Exception:
+            record("failure_notice_failed", code="notification")
 
     async def _complete_text(
         self,
@@ -132,16 +161,16 @@ class CursorCLIProvider(Provider):
         conversation_id,
         request_sequence,
         request_max_retries=None,
+        event=None,
     ):
         started = time.monotonic()
-        event = None
-        try:
-            from astrbot.core.platform.astr_message_event import current_message_event
-
-            event = current_message_event.get()
-        except (ImportError, LookupError):
-            pass
         origin = getattr(event, "unified_msg_origin", "") if event is not None else ""
+        record(
+            "request_scope",
+            has_conversation_id=isinstance(conversation_id, str) and bool(conversation_id),
+            has_session_id=isinstance(session_id, str) and bool(session_id),
+            has_message_event=event is not None,
+        )
         stable = conversation_id or session_id
         scope = None
         stats_session = None
@@ -151,7 +180,7 @@ class CursorCLIProvider(Provider):
             stats_session = runtime.usage_session(raw)
 
         try:
-            if self._closed or self.engine.closed:
+            if self._closed or (self.engine is not None and self.engine.closed):
                 raise CursorError("closed")
             has_tools = func_tool is not None and (
                 not func_tool.empty()
@@ -164,9 +193,6 @@ class CursorCLIProvider(Provider):
                 raise UnsupportedFeatureError("audio")
             if has_tools or tool_calls_result or tool_choice == "required":
                 raise UnsupportedFeatureError("tool_calls")
-            chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
-            if chosen != self.settings["model"]:
-                raise CursorError("model")
             messages = normalize_messages(
                 prompt,
                 contexts,
@@ -174,8 +200,17 @@ class CursorCLIProvider(Provider):
                 extra_user_content_parts,
                 max_bytes=self.settings["context_max_bytes"],
             )
+            await runtime.ensure_model_validated()
+            if self._closed:
+                raise CursorError("closed")
+            chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
+            cfg = runtime.settings()
+            if chosen != cfg["model"]:
+                raise CursorError("model")
+            if self.engine is None:
+                self.engine = runtime.acquire_engine()
         except CursorError as exc:
-            if exc.code != "closed":
+            if exc.code != "closed" and self.engine is not None:
                 self.engine.last_failure = exc.code
             record(
                 "request_finished",
@@ -228,4 +263,5 @@ class CursorCLIProvider(Provider):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await runtime.release_engine(self.engine)
+        if self.engine is not None:
+            await runtime.release_engine(self.engine)
