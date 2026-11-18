@@ -1,11 +1,11 @@
 # 自动注册来源与原生模型
 
-自动注册已包含在默认分支 `main`，安装或更新后保存插件配置并重载即可使用。
+安装或更新 `main` 上的插件后，保存插件配置并重载即可注册。
 
 安装或重载时：
 
 1. 在 `provider_sources` 中查找 `type=cursor_cli` 的来源，优先使用 ID 为 `cursor_cli` 的条目，否则复用已有 Cursor 来源。没有则创建。
-2. 来源 Key、API Base 留空。模型只声明 `modalities=["text"]`。
+2. 来源 Key、API Base 留空。当前配置的原生模型声明 `modalities=["text", "image"]`，让 AstrBot 把图片交给此适配器。模型是否接受图片，以当前请求的 Cursor 返回为准。
 3. 插件配置 `model_id` 明确有效时，先从 ACP 查询一次模型列表并按 [解析规则](MODEL_IDS.md) 得到 modelId，再查找同 ID 或同 Cursor 模型的条目。有则更新/复用，没有才新增。新建条目的 `id` 和 `model` 均使用解析后的 ACP modelId，不写入管理端 ID 或展示名，不自动替换成别的模型。
 4. 使用 AstrBot 配置的 `save_config_async()` 保存变更，同步 ProviderManager 的来源、模型列表。没有变更不重复保存。保存快照被更新版本取代时重试一次；保存失败则回滚自己这次仍未被并发修改的字段，给出固定错误。
 5. 冷启动时由 AstrBot 随后加载模型；运行中的插件安装或重载会加载自己的目标模型或刷新已有 Cursor 实例，最后恢复之前的当前模型选择，包括原先未选择模型的状态。
@@ -41,4 +41,4 @@ python -m unittest -v tests.test_registration tests.test_history_reuse
 
 注册测试运行真实 `runtime.configure/initialize` 和配置规划/保存/回滚代码；AstrBot 配置保存、ProviderManager 及生成的 Provider 实例使用明确的内存替身。覆盖首次创建、重复加载、空/auto、默认/备用及 OAuth/DeepSeek 不变、text 能力、已有配置更新、别名、禁用、ID 冲突、冷/热启动和保存失败。没有调用 CLI、SSH、网络或真实账户；未覆盖实际 AstrBot WebUI 或生产安装。
 
-回退时恢复目标旧版本的完整插件目录并重载。已写入的配置不会被自动删除，以免破坏用户后来设置的引用；如需移除注册项，先确认没有默认/备用/会话引用，再在 AstrBot 模型设置中处理。
+回退本次提交可用 `git revert <本次提交号>`，再重载 Cursor Provider。已写入的配置不会被自动删除，以免破坏用户后来设置的引用；如需移除注册项，先确认没有默认/备用/会话引用，再在 AstrBot 模型设置中处理。

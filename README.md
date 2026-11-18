@@ -2,21 +2,17 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-当前版本：0.2.0。自动注册、ACP 模型 ID 解析、增量复用、时钟处理和本地统计均已包含在默认分支 `main`。
+> v0.4.1 只发送当前轮图片，并修复 AstrBot 附加内容被重复计入历史导致的会话重建。请下载源码 ZIP，在 AstrBot 插件页上传。[v0.4.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.1)
 
-## 安装与使用
-
-在 AstrBot 插件页使用以下仓库地址安装或更新：
+也可以在 AstrBot 插件页用仓库 URL 安装或更新。默认分支 `main` 提供 `0.4.1`。
 
 ```text
 https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 ```
 
-先在 CLI 所在环境自行登录 Cursor，再在插件配置中填写运行方式和明确的 `model_id`，保存并重载。插件通过 ACP 校验后自动新增来源和原生模型，无需手工添加；由你在目标会话中选择使用。原有默认模型、备用模型和其他提供商配置保持不变。
+保存明确的 `model_id` 后重载插件，即会新增或更新 Cursor 来源和原生模型。原有默认模型和备用模型保持不变。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 
-Ubuntu、1Panel、Docker 的本地模式及可选 SSH 模式见 [安装与升级指南](docs/INSTALL.md)。无需安装 Cursor 桌面版。
-
-管理员可用 `/cursor_usage` 查看插件本地统计，或加 `session`、`day`、`model` 查看分组。统计不是 Cursor 账单或套餐额度，数据仅保存到插件专属目录，见 [本地统计说明](docs/LOCAL_USAGE.md)。
+登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。需要查看账号 Token 时，可在同一页选取 Cursor 官方导出的用量 CSV，文件只在浏览器内读取。[用量说明](docs/LOCAL_USAGE.md)
 
 ## 功能
 
@@ -33,6 +29,7 @@ Ubuntu、1Panel、Docker 的本地模式及可选 SSH 模式见 [安装与升级
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `model_id` | 空 | 明确的 ACP modelId、唯一展示名或支持的管理端 ID；以 ACP 列表为准，新建原生 `id` 和 `model` 均使用解析后的 modelId；空/auto/default 不建模型 |
+| `image_unsupported_message` | 当前 Cursor 运行端或所选模型不支持图片输入。 | 图片输入不受支持时的聊天提示，留空使用默认提示 |
 | `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
 | `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
 | `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
@@ -68,7 +65,9 @@ Ubuntu、1Panel、Docker 的本地模式及可选 SSH 模式见 [安装与升级
 
 ## 能力与费用
 
-当前适配器声明文本能力。直接传入图片、音频或工具时抛出 `UnsupportedFeatureError`，有稳定的 `code` 和 `feature`，上层可以据此降级。此版本尚未将 AstrBot 工具注册到 Cursor，不能输出伪造的 `tool_calls`。
+当前适配器接收文本和图片。图片随正常请求发给所选模型，模型或运行端明确报不支持时返回 `image_unsupported`。音频和工具请求仍返回 `UnsupportedFeatureError`。
+
+图片传输的协议证据和隔离测试方法见 [Cursor ACP 图片输入验收](docs/IMAGE_INPUT.md)。
 
 `input_bytes` 是完整规范化历史，`sent_input_bytes` 是本次发送的文本，`wire_bytes` 是 ACP JSON 帧大小，不含 SSH/TLS 开销。它们都不是 token 或账单金额。会话复用减少重复传输和重复入库，但不能保证历史 token 不再计费或额度下降一半。
 
@@ -88,11 +87,14 @@ python -m unittest -v tests.test_history_reuse
 # 自动注册回归，使用配置保存/ProviderManager 测试替身
 python -m unittest -v tests.test_registration
 
-# 完整内存回归：时钟、统计、模型解析、注册和历史复用
-python -m unittest tests.test_system_clock tests.test_usage tests.test_models tests.test_registration tests.test_history_reuse
+# 模型解析、自动注册和历史复用回归；使用模拟 ACP 列表，无网络或子进程
+python -m unittest tests.test_models tests.test_registration tests.test_history_reuse
 
 # 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
 python tests/check_environment.py --mock
+
+# 在临时 AstrBot 4.29.4 实例中验证重载、禁用和备用模型，使用模拟 ACP
+python -m tests.check_astrbot_lifecycle
 
 # 真实环境，会发起模型请求并可能计费
 python tests/check_environment.py --config /path/to/plugin-config.json --allow-model-requests
@@ -103,11 +105,9 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 
 机器人管理员可运行 `/cursor_doctor`。每项环境检查打印 PASS、FAIL 或 SKIP，并带 RAW 结果或异常堆栈；不会把认证报文或密钥打印出来。详细说明见 [测试指南](docs/ACCEPTANCE.md)。
 
-完整内存回归已执行，79 项通过，原始输出见 [测试记录](docs/SYSTEM_CLOCK_TEST_OUTPUT.txt)。自动化测试使用模拟 ACP 和临时数据，不代表 Cursor 套餐扣费结论；本地统计也不用于证明官方消耗。
-
 ## 环境与来源
 
-接口目标为 AstrBot 4.29.4；Python 3.10+。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离；容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
+接口目标为 AstrBot 4.29.4（Python 3.12+）。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离，容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
 
 Provider 注册和重载改编自 [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)，来源见 [NOTICE](NOTICE)。使用官方 [Cursor ACP](https://cursor.com/docs/cli/acp) 协议；不修改 AstrBot 核心，不搭建 OpenAI 兼容 HTTP 桥接。
 

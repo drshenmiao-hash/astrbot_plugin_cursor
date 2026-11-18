@@ -5,8 +5,14 @@ import json
 import logging
 import time
 
-from .errors import CursorError
-from .logic import classify_error
+from .errors import CursorError, CursorStreamError, ImageLimitError
+from .images import MAX_IMAGE_FRAME_BYTES
+from .logic import (
+    classify_chunk_tail_error,
+    classify_error,
+    classify_image_error,
+    classify_reply_error,
+)
 from .models import ModelResolutionError, catalog_ids, resolve_model
 
 logger = logging.getLogger("astrbot")
@@ -41,9 +47,12 @@ class ACPClient:
             if len(self.stderr_sample) < 8192:
                 self.stderr_sample.extend(chunk[: 8192 - len(self.stderr_sample)])
 
-    async def _write(self, message):
+    async def _write(self, message, *, image_prompt=False):
         raw = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
-        if len(raw) > self.frame_limit:
+        limit = self.frame_limit + (MAX_IMAGE_FRAME_BYTES if image_prompt else 0)
+        if len(raw) > limit:
+            if image_prompt:
+                raise ImageLimitError("frame_bytes", limit, len(raw))
             raise CursorError("context_limit")
         async with self._write_lock:
             try:
@@ -53,7 +62,7 @@ class ACPClient:
                 raise CursorError("process_exited") from None
         return len(raw)
 
-    async def call(self, method, params, *, timeout=None):
+    async def call(self, method, params, *, timeout=None, image_prompt=False):
         if self.closed:
             raise CursorError(self.failure_code or "process_exited")
         self._next_id += 1
@@ -62,7 +71,8 @@ class ACPClient:
         self.pending[request_id] = future
         try:
             sent_bytes = await self._write(
-                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+                {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
+                image_prompt=image_prompt,
             )
             if method == "session/prompt" and params.get("sessionId") in self.turns:
                 self.turns[params["sessionId"]]["wire_bytes"] = sent_bytes
@@ -91,7 +101,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.2.0"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.1"},
                 },
                 timeout=30,
             )
@@ -153,7 +163,14 @@ class ACPClient:
         self.session_models[session_id] = model
         return session_id
 
-    async def prompt(self, session_id, text, *, stats=None):
+    async def prompt(self, session_id, text, *, stats=None, images=()):
+        if images:
+            capabilities = (self.initialized or {}).get("agentCapabilities")
+            supported = (
+                capabilities.get("promptCapabilities") if isinstance(capabilities, dict) else None
+            )
+            if not isinstance(supported, dict) or supported.get("image") is not True:
+                raise CursorError("image_unsupported")
         state = {"parts": [], "size": 0, "error": None}
         self.turns[session_id] = state
         try:
@@ -161,8 +178,9 @@ class ACPClient:
                 "session/prompt",
                 {
                     "sessionId": session_id,
-                    "prompt": [{"type": "text", "text": text}],
+                    "prompt": [{"type": "text", "text": text}, *images],
                 },
+                **({"image_prompt": True} if images else {}),
             )
             if state["error"]:
                 raise CursorError(state["error"])
@@ -178,7 +196,24 @@ class ACPClient:
             text = "".join(state["parts"])
             if not text.strip():
                 raise CursorError("empty_output")
+            if images:
+                image_error = classify_image_error(text, reply=True) or classify_image_error(
+                    state["parts"][-1], reply=True
+                )
+                if image_error:
+                    raise CursorError(image_error)
+            error_code = classify_reply_error(text) or classify_chunk_tail_error(
+                text, state["parts"]
+            )
+            if error_code:
+                raise CursorStreamError(error_code)
             return {"text": text, "wire_bytes": state.get("wire_bytes", 0)}
+        except CursorStreamError:
+            raise
+        except CursorError as exc:
+            if exc.code in {"connection_stalled", "ping_timeout", "upstream_retryable"}:
+                raise CursorStreamError(exc.code) from None
+            raise
         finally:
             if stats is not None:
                 stats.update(wire_bytes=state.get("wire_bytes", 0), output_bytes=state["size"])
@@ -285,11 +320,13 @@ class ACPClient:
                         error = message["error"]
                         # ACP -32000 means authentication required. Never expose
                         # raw RPC error data, which can include prompts or URLs.
-                        code = (
-                            "not_logged_in"
-                            if error.get("code") == -32000
-                            else classify_error(str(error.get("message", "")))
-                        )
+                        if error.get("code") == -32000:
+                            code = "not_logged_in"
+                        else:
+                            message_text = str(error.get("message", ""))
+                            code = classify_error(message_text)
+                            if code in {"cli_failed", "timeout"}:
+                                code = classify_reply_error(message_text) or code
                         future.set_exception(CursorError(code))
                     elif isinstance(message.get("result"), dict):
                         future.set_result(message["result"])

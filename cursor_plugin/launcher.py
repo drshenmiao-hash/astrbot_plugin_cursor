@@ -13,6 +13,8 @@ from .credentials import DENY, cli_env, read_browser_credentials, write_credenti
 from .errors import CursorError
 from .logic import classify_error
 from .metrics import record
+from .process import run_process
+from .protocol import RUNNER_CLEANUP_CONFIRMED, RUNNER_CLEANUP_PROTOCOL
 
 
 def ssh_argv(cfg, *, diagnose=False):
@@ -193,6 +195,20 @@ class ProcessOwner:
                 ready = {"cwd": "/work", "transport": "local"}
             else:
                 argv = ssh_argv(cfg)
+                code, output, error = await run_process(
+                    [*argv, "diagnose"], b"", cwd=str(root), env=env, timeout=20, output_limit=16384
+                )
+                if code:
+                    raise CursorError(ssh_error_code(error))
+                try:
+                    report = json.loads(output)
+                    capability = (
+                        report.get("cleanup_protocol") if isinstance(report, dict) else None
+                    )
+                except (ValueError, UnicodeError, RecursionError):
+                    raise CursorError("protocol") from None
+                if type(capability) is not int or capability != RUNNER_CLEANUP_PROTOCOL:
+                    raise CursorError("runner_cleanup_unsupported")
             self.process = await asyncio.create_subprocess_exec(
                 *argv,
                 stdin=asyncio.subprocess.PIPE,
@@ -219,6 +235,46 @@ class ProcessOwner:
 
     async def close(self):
         proc, self.process = self.process, None
+        try:
+            if proc is not None and self.kind == "ssh":
+                await self._close_remote(proc)
+            else:
+                await self._close_local(proc)
+        finally:
+            self.sync_credentials()
+            self.temporary_auth = None
+            if self.lock is not None:
+                self.lock.close()
+                self.lock = None
+            if self.scratch is not None:
+                self.scratch.cleanup()
+                self.scratch = None
+
+    async def _close_remote(self, proc):
+        async def discard(stream):
+            while await stream.read(16384):
+                pass
+
+        if proc.stdin:
+            # Do not wait for buffered ACP input to flush during shutdown.
+            proc.stdin.transport.abort()
+        try:
+            code, _, _ = await asyncio.wait_for(
+                asyncio.gather(proc.wait(), discard(proc.stdout), discard(proc.stderr)), timeout=10
+            )
+        except (asyncio.TimeoutError, OSError):
+            code = None
+        if code != RUNNER_CLEANUP_CONFIRMED:
+            # Forcing the local SSH process down does not prove remote cleanup.
+            try:
+                await self._close_local(proc)
+            except CursorError:
+                pass
+            record("process_cleanup_failed", transport="ssh", code="cleanup_unverified")
+            raise CursorError("cleanup_unverified")
+        record("process_cleanup_verified", transport="ssh", code="ok")
+
+    async def _close_local(self, proc):
         if proc is not None:
             if proc.stdin:
                 proc.stdin.close()
@@ -247,14 +303,7 @@ class ProcessOwner:
                         record(
                             "process_cleanup_failed", transport=self.kind, code="cleanup_timeout"
                         )
-        self.sync_credentials()
-        self.temporary_auth = None
-        if self.lock is not None:
-            self.lock.close()
-            self.lock = None
-        if self.scratch is not None:
-            self.scratch.cleanup()
-            self.scratch = None
+                        raise CursorError("cleanup_timeout") from None
 
     def sync_credentials(self):
         if self.temporary_auth is not None:

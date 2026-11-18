@@ -2,6 +2,7 @@
 """Offline ACP peer for the operator-run environment script; no network or login."""
 
 import asyncio
+import base64
 import json
 import sys
 
@@ -30,19 +31,34 @@ async def main():
                 await asyncio.sleep(10)
             else:
                 await asyncio.sleep(0.05)
-            send(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "session/update",
-                    "params": {
-                        "sessionId": sid,
-                        "update": {
-                            "sessionUpdate": "agent_message_chunk",
-                            "content": {"type": "text", "text": "OK"},
+            chunks = ["OK"]
+            if "MOCK_STREAM_FAILURE" in text:
+                chunks = ["部分正常回复。", "Error: RetriableError: [unavailable] PING timed out"]
+            if "MOCK_IMAGE_REQUIRED" in text:
+                images = params["prompt"][1:]
+                png = (
+                    len(images) == 1
+                    and images[0].get("type") == "image"
+                    and images[0].get("mimeType") == "image/png"
+                    and base64.b64decode(images[0]["data"], validate=True).startswith(b"\x89PNG")
+                )
+                chunks = ["INLINE-IMAGE" if png else "IMAGE-MISSING"]
+            if "MOCK_NO_IMAGE" in text:
+                chunks = ["NO-IMAGE" if len(params["prompt"]) == 1 else "UNEXPECTED-IMAGE"]
+            for chunk in chunks:
+                send(
+                    {
+                        "jsonrpc": "2.0",
+                        "method": "session/update",
+                        "params": {
+                            "sessionId": sid,
+                            "update": {
+                                "sessionUpdate": "agent_message_chunk",
+                                "content": {"type": "text", "text": chunk},
+                            },
                         },
-                    },
-                }
-            )
+                    }
+                )
             result(request, {"stopReason": "end_turn"})
         except asyncio.CancelledError:
             result(request, {"stopReason": "cancelled"})
@@ -58,7 +74,7 @@ async def main():
                 request,
                 {
                     "protocolVersion": 1,
-                    "agentCapabilities": {},
+                    "agentCapabilities": {"promptCapabilities": {"image": True}},
                     "authMethods": [{"id": "cursor_login", "name": "Mock"}],
                 },
             )

@@ -1,7 +1,10 @@
 """Typed, fixed errors for routing and diagnostics; upstream payloads stay private."""
 
+import logging
+
 MESSAGES = {
     "registration_save_failed": "Cursor 来源或模型配置未能保存，请检查 AstrBot 配置写入权限并重载插件。",
+    "usage_unavailable": "Cursor 本地统计不可用，请检查插件数据目录权限。",
     "source_id_conflict": "cursor_cli 来源 ID 已被其他提供商占用；未覆盖已有配置，请处理冲突后重载。",
     "config": "Cursor 配置无效，请检查插件配置。",
     "model": "请明确配置同一个 Cursor 模型 ID；不支持 Auto 或默认路由。",
@@ -9,8 +12,16 @@ MESSAGES = {
     "model_ambiguous": "模型名称或管理端 ID 对应多个 ACP modelId，请明确填写 modelId；未选择模型。",
     "model_not_validated": "Cursor model_id 尚未通过 ACP 校验，请先完成登录并重载插件。",
     "model_mismatch": "Cursor 未确认指定模型，已停止请求。",
+    "connection_stalled": "Cursor 生成连接停滞；请稍后重试或使用备用模型。",
+    "ping_timeout": "Cursor 生成连接心跳超时；请稍后重试或使用备用模型。",
+    "upstream_retryable": "Cursor 生成流暂时失败；请稍后重试或使用备用模型。",
     "ask_unavailable": "Cursor 未保持 Ask 模式，已停止请求。",
     "unsupported": "Cursor 当前适配器不支持此输入能力。",
+    "image_source": "图片来源不可读，须使用 AstrBot 临时目录内的普通文件或内嵌图片。",
+    "image_invalid": "图片格式或内容无效，请发送尺寸合适的静态 PNG、JPEG 或 WebP。",
+    "image_limit": "本轮图片超过限制，本次请求未发送。",
+    "image_unsupported": "当前 Cursor 运行端或所选模型不支持图片输入。",
+    "image_unavailable": "当前 Cursor CLI 或指定模型拒绝了图片，本次没有按纯文本重发。",
     "context_limit": "完整上下文超过 context_max_bytes，已报错；不会截断或悄悄丢弃历史。",
     "timeout": "Cursor 请求超时，已发出取消；请检查诊断记录和用量后再决定是否重试。",
     "queue_timeout": "请求排队超时，本次没有开始模型调用；请稍后重试。",
@@ -31,6 +42,8 @@ MESSAGES = {
     "cancel_unconfirmed": "远端取消未确认，已关闭连接；请核对用量。",
     "closed": "Cursor Provider 已停止。",
     "cleanup_timeout": "Cursor 进程清理未在期限内完成。",
+    "cleanup_unverified": "未收到 Cursor 运行器清理回执，无法确认远端进程和锁已释放。",
+    "runner_cleanup_unsupported": "当前 Cursor 运行器未提供清理回执，请使用与插件配套的运行器版本。",
     "auth_persist": "Cursor 登录刷新结果未能保存。",
     "ssh_missing": "缺少 OpenSSH 客户端。",
     "ssh_key_missing": "缺少专用 SSH 客户端私钥。",
@@ -69,3 +82,50 @@ class UnsupportedFeatureError(CursorError):
             self,
             f"[cursor:{self.code}] 当前 Cursor ACP 适配器不支持 {self.feature}，请使用支持该能力的模型。",
         )
+
+
+class ImageUnsupportedError(CursorError):
+    def __init__(self, message):
+        self.code = "image_unsupported"
+        RuntimeError.__init__(self, f"[cursor:{self.code}] {message}")
+
+
+class ImageLimitError(CursorError):
+    def __init__(self, kind, limit, actual=None):
+        self.code = "image_limit"
+        self.metadata = {"image_limit_kind": kind, "image_limit_max": limit}
+        if actual is not None:
+            self.metadata["image_limit_actual"] = actual
+        label = {
+            "count": "张数",
+            "file_bytes": "单张字节数",
+            "total_bytes": "总字节数",
+            "pixels": "像素数",
+            "frame_bytes": "ACP 帧字节数",
+        }[kind]
+        measured = f"，实际 {actual}" if actual is not None else ""
+        RuntimeError.__init__(
+            self,
+            f"[cursor:image_limit] 本轮图片{label}超限（上限 {limit}{measured}），本次请求未发送。",
+        )
+
+
+class CursorStreamError(CursorError):
+    retryable = True
+
+
+async def retry_stream_errors(operation, *, request_max_retries=None):
+    """At most one retry of a detected stream error; other failures propagate."""
+    retries = 0 if isinstance(request_max_retries, int) and request_max_retries <= 1 else 1
+    for attempt in range(retries + 1):
+        try:
+            return await operation()
+        except CursorStreamError as exc:
+            logging.getLogger("astrbot").warning(
+                "cursor_stream_failure code=%s attempt=%d max_attempts=%d retryable=true",
+                exc.code,
+                attempt + 1,
+                retries + 1,
+            )
+            if attempt == retries:
+                raise

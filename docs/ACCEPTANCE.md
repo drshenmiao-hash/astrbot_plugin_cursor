@@ -1,14 +1,16 @@
 # 检查与验收
 
-默认分支 main 包含下列已执行的自动化检查：79 项时钟、本地统计、模型解析、注册及历史复用回归，以及 23 项纯逻辑检查。内存回归使用模拟 ACP/ProviderManager 和临时数据，不访问真实账户，不代表 Cursor 套餐计费结论。
+在 AstrBot 4.29.4 上可用下列命令检查当前版本。自动化使用模拟 ACP 和临时数据，真实 Cursor 联通与套餐计费需独立验收。
 
 完整回归命令：
 
 ```bash
-python -m unittest tests.test_system_clock tests.test_usage tests.test_models tests.test_registration tests.test_history_reuse
+python -m unittest discover -s tests -v
+python -m tests.check_astrbot_lifecycle
+node --test tests/test_cursor_csv.cjs
 ```
 
-79 项通过的原始输出见 [SYSTEM_CLOCK_TEST_OUTPUT.txt](SYSTEM_CLOCK_TEST_OUTPUT.txt)。环境脚本及真实账户的检查结果应单独记录，SKIP 不计作通过。
+早期 79 项时钟、统计、模型解析、注册和历史复用测试的记录见 [SYSTEM_CLOCK_TEST_OUTPUT.txt](SYSTEM_CLOCK_TEST_OUTPUT.txt)。环境脚本及真实账户的检查结果应单独记录，SKIP 不计作通过。
 
 ## A. 已执行的纯逻辑
 

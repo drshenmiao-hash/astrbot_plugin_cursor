@@ -6,9 +6,9 @@ import logging
 import os
 import sqlite3
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 logger = logging.getLogger("astrbot")
@@ -22,6 +22,15 @@ _NUMBERS = (
     "output_bytes",
 )
 _GROUPS = {"total": "'total'", "session": "session", "day": "day", "model": "model_id"}
+DASHBOARD_RANGES = (7, 30, 90)
+_TOTALS = f"""
+    COUNT(*) AS requests,
+    COALESCE(SUM(code = 'ok'), 0) AS success,
+    COALESCE(SUM(code != 'ok'), 0) AS failed,
+    {", ".join(f"COALESCE(SUM({name}), 0) AS {name}" for name in _NUMBERS)},
+    COALESCE(SUM(process_reused), 0) AS process_reused,
+    COALESCE(SUM(reused), 0) AS reused
+"""
 
 
 class UsageStore:
@@ -53,6 +62,7 @@ class UsageStore:
                 process_reused INTEGER NOT NULL, reused INTEGER NOT NULL,
                 reset_reason TEXT NOT NULL
             )""")
+            db.execute("CREATE INDEX IF NOT EXISTS requests_day ON requests(day)")
         # One storage worker only; no model workers, queue limits or sessions change.
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cursor-local-usage")
         self._lock = threading.Lock()
@@ -95,19 +105,21 @@ class UsageStore:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Local statistics store is closed")
-            self._last = self._writer.submit(self._write, row)
-            self._last.add_done_callback(self._write_done)
+            self._last = self._writer.submit(self._write_record, row)
             return self._last
 
     def _write(self, row):
         with self._connect() as db:
             db.execute("INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
 
-    def _write_done(self, future):
-        if future.exception() is not None:
+    def _write_record(self, row):
+        try:
+            self._write(row)
+        except Exception:
             # Never log raw SQLite errors, event contents, credentials or paths.
             self.write_failures += 1
             logger.warning("cursor_local_usage code=write_failed")
+            raise
 
     def flush(self):
         with self._lock:
@@ -115,18 +127,19 @@ class UsageStore:
         if future is not None:
             future.result()
 
+    def _wait_for_writes(self):
+        with self._lock:
+            pending = self._last
+        if pending is not None:
+            wait([pending])
+
     def summary(self, group="total", key="", *, limit=20):
         if group not in _GROUPS:
             raise ValueError("Use total, session, day or model")
-        self.flush()
+        self._wait_for_writes()
         column = _GROUPS[group]
         where, params = (f" WHERE {column} = ?", [key]) if key else ("", [])
-        sums = ",".join(f"COALESCE(SUM({name}),0) AS {name}" for name in _NUMBERS)
-        sql = f"""SELECT {column} AS label, COUNT(*) AS requests,
-            COALESCE(SUM(code='ok'),0) AS success,
-            COALESCE(SUM(code!='ok'),0) AS failed,
-            {sums}, COALESCE(SUM(process_reused),0) AS process_reused,
-            COALESCE(SUM(reused),0) AS reused
+        sql = f"""SELECT {column} AS label, {_TOTALS}
             FROM requests{where} GROUP BY {column}
             ORDER BY MAX(day) DESC, label LIMIT ?"""
         with self._connect() as db:
@@ -146,6 +159,50 @@ class UsageStore:
             "group": group,
             "timezone": "UTC",
             "rows": rows,
+            "write_failures": self.write_failures,
+        }
+
+    def dashboard(self, days):
+        """Read a consistent, bounded UTC view even after an individual write fails."""
+        if type(days) is not int or days not in DASHBOARD_RANGES:
+            raise ValueError("Unsupported dashboard range")
+        self._wait_for_writes()
+
+        end = datetime.now(timezone.utc).date()
+        start = end - timedelta(days=days - 1)
+        date_filter = (start.isoformat(), end.isoformat())
+        where = "FROM requests WHERE day BETWEEN ? AND ?"
+
+        with self._connect() as db:
+            db.row_factory = sqlite3.Row
+            db.execute("BEGIN")
+            total = dict(db.execute(f"SELECT {_TOTALS} {where}", date_filter).fetchone())
+            day_rows = db.execute(
+                f"SELECT day AS label, COUNT(*) AS requests, SUM(code != 'ok') AS failed {where} GROUP BY day",
+                date_filter,
+            )
+            trend = {row["label"]: dict(row) for row in day_rows}
+            groups = {}
+            for key, column in (("model", "model_id"), ("session", "session"), ("code", "code")):
+                groups[key] = [
+                    dict(row)
+                    for row in db.execute(
+                        f"SELECT {column} AS label, {_TOTALS} {where} "
+                        f"GROUP BY {column} ORDER BY requests DESC, label LIMIT 20",
+                        date_filter,
+                    )
+                ]
+        labels = [(start + timedelta(days=offset)).isoformat() for offset in range(days)]
+        return {
+            "notice": DISCLAIMER,
+            "timezone": "UTC",
+            "start": date_filter[0],
+            "end": date_filter[1],
+            "totals": total,
+            "trend": [
+                trend.get(label, {"label": label, "requests": 0, "failed": 0}) for label in labels
+            ],
+            "groups": groups,
             "write_failures": self.write_failures,
         }
 

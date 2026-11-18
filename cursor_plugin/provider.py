@@ -5,13 +5,23 @@
 import asyncio
 import hashlib
 import secrets
+import time
+import uuid
 
 from astrbot.api.event import MessageChain
 from astrbot.api.provider import LLMResponse, Provider
 from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
 
 from . import runtime
-from .errors import CursorError, UnsupportedFeatureError
+from .errors import (
+    CursorError,
+    ImageLimitError,
+    ImageUnsupportedError,
+    UnsupportedFeatureError,
+    retry_stream_errors,
+)
+from .images import ImageInput
+from .metrics import record
 from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
@@ -24,7 +34,7 @@ def register_adapter(cls):
     if metadata is None:
         register_provider_adapter(
             runtime.PROVIDER_TYPE,
-            "Cursor 官方 CLI（纯文本 / Ask）",
+            "Cursor 官方 CLI（Ask）",
             default_config_tmpl=dict(TEMPLATE),
             provider_display_name="Cursor CLI",
         )(cls)
@@ -45,11 +55,12 @@ class CursorCLIProvider(Provider):
     def __init__(self, provider_config, provider_settings):
         # Dashboard-created models can default to image/audio/tool support.
         # Declare this adapter's actual capabilities on its own config copy.
-        config = {**provider_config, "modalities": ["text"]}
-        super().__init__(config, provider_settings)
         cfg = runtime.settings()
-        self.set_model(provider_config.get("model") or cfg["model"])
-        self.engine = runtime.acquire_engine()
+        model = provider_config.get("model") or cfg["model"]
+        config = {**provider_config, "modalities": ["text", "image"]}
+        super().__init__(config, provider_settings)
+        self.set_model(model)
+        self.engine = runtime.acquire_engine() if cfg["model"] else None
         self.settings = cfg
         self._pending = set()
         self._closed = False
@@ -67,6 +78,8 @@ class CursorCLIProvider(Provider):
 
     async def get_models(self):
         # ACP catalog only; no model prompt or automatic model selection.
+        if self._closed or (self.engine is not None and self.engine.closed):
+            raise CursorError("closed")
         return await runtime.available_model_ids()
 
     async def text_chat(
@@ -85,6 +98,14 @@ class CursorCLIProvider(Provider):
         request_max_retries=None,
         **kwargs,
     ):
+        event = None
+        try:
+            from astrbot.core.platform.astr_message_event import current_message_event
+
+            event = current_message_event.get()
+        except (ImportError, LookupError):
+            pass
+        conversation_id = kwargs.get("conversation_id")
         try:
             return await self._complete_text(
                 prompt=prompt,
@@ -98,16 +119,49 @@ class CursorCLIProvider(Provider):
                 extra_user_content_parts=extra_user_content_parts,
                 tool_choice=tool_choice,
                 session_id=session_id,
-                conversation_id=kwargs.get("conversation_id"),
+                conversation_id=conversation_id,
                 request_sequence=kwargs.get("request_sequence"),
+                request_max_retries=request_max_retries,
+                event=event,
             )
         except asyncio.CancelledError:
             raise
-        except CursorError:
+        except CursorError as exc:
+            image_message = (
+                self.settings["image_unsupported_message"]
+                if exc.code == "image_unsupported"
+                else None
+            )
+            if event is not None and (
+                image_message or isinstance(conversation_id, str) and conversation_id
+            ):
+                await self._notify_failure(event, exc.code, message=image_message)
+            if image_message is not None:
+                raise ImageUnsupportedError(image_message) from None
             raise
         except Exception:
             # Also sanitize failures while serializing framework content objects.
             raise CursorError("cli_failed") from None
+
+    @staticmethod
+    async def _notify_failure(event, code, *, message=None):
+        key = "_astrbot_cursor_failure_notice"
+        try:
+            if event.get_extra(key):
+                return
+            event.set_extra(key, True)
+            await asyncio.wait_for(
+                event.send(
+                    MessageChain().message(
+                        message
+                        if message is not None
+                        else f"Cursor 本次未能回复（{code}），后续响应由 AstrBot 处理。"
+                    )
+                ),
+                timeout=2,
+            )
+        except Exception:
+            record("failure_notice_failed", code="notification")
 
     async def _complete_text(
         self,
@@ -125,38 +179,17 @@ class CursorCLIProvider(Provider):
         session_id,
         conversation_id,
         request_sequence,
+        request_max_retries=None,
+        event=None,
     ):
-        if self._closed:
-            raise CursorError("closed")
-        has_tools = func_tool is not None and (
-            not func_tool.empty()
-            if callable(getattr(func_tool, "empty", None))
-            else bool(func_tool)
-        )
-        if image_urls:
-            raise UnsupportedFeatureError("image")
-        if audio_urls:
-            raise UnsupportedFeatureError("audio")
-        if has_tools or tool_calls_result or tool_choice == "required":
-            raise UnsupportedFeatureError("tool_calls")
-        chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
-        if chosen != self.settings["model"]:
-            raise CursorError("model")
-        messages = normalize_messages(
-            prompt,
-            contexts,
-            system_prompt,
-            extra_user_content_parts,
-            max_bytes=self.settings["context_max_bytes"],
-        )
-        event = None
-        try:
-            from astrbot.core.platform.astr_message_event import current_message_event
-
-            event = current_message_event.get()
-        except (ImportError, LookupError):
-            pass
+        started = time.monotonic()
         origin = getattr(event, "unified_msg_origin", "") if event is not None else ""
+        record(
+            "request_scope",
+            has_conversation_id=isinstance(conversation_id, str) and bool(conversation_id),
+            has_session_id=isinstance(session_id, str) and bool(session_id),
+            has_message_event=event is not None,
+        )
         stable = conversation_id or session_id
         scope = None
         stats_session = None
@@ -165,29 +198,86 @@ class CursorCLIProvider(Provider):
             scope = hashlib.blake2s(raw.encode(), key=_SESSION_SALT, digest_size=16).hexdigest()
             stats_session = runtime.usage_session(raw)
 
+        try:
+            if self._closed or (self.engine is not None and self.engine.closed):
+                raise CursorError("closed")
+            has_tools = func_tool is not None and (
+                not func_tool.empty()
+                if callable(getattr(func_tool, "empty", None))
+                else bool(func_tool)
+            )
+            if audio_urls:
+                raise UnsupportedFeatureError("audio")
+            if has_tools or tool_calls_result or tool_choice == "required":
+                raise UnsupportedFeatureError("tool_calls")
+            image_input = None
+            arguments = (prompt, contexts, system_prompt, extra_user_content_parts)
+            options = {"max_bytes": self.settings["context_max_bytes"], "image_urls": image_urls}
+            try:
+                messages = normalize_messages(*arguments, **options)
+            except UnsupportedFeatureError as exc:
+                if exc.feature != "image":
+                    raise
+                from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+
+                image_input = ImageInput(get_astrbot_temp_path())
+                messages = await asyncio.to_thread(
+                    normalize_messages, *arguments, **options, image_input=image_input
+                )
+            await runtime.ensure_model_validated()
+            if self._closed:
+                raise CursorError("closed")
+            chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
+            cfg = runtime.settings()
+            if chosen != cfg["model"]:
+                raise CursorError("model")
+            if self.engine is None:
+                self.engine = runtime.acquire_engine()
+        except CursorError as exc:
+            if exc.code != "closed" and self.engine is not None:
+                self.engine.last_failure = exc.code
+            record(
+                "request_finished",
+                request_id=uuid.uuid4().hex,
+                session=stats_session or scope,
+                code=exc.code,
+                duration_ms=round((time.monotonic() - started) * 1000),
+                reset_reason="preflight",
+                **(exc.metadata if isinstance(exc, ImageLimitError) else {}),
+            )
+            raise
+
         async def on_queued(depth):
             if event is not None:
-                await event.send(
-                    MessageChain().message(
-                        f"Cursor 请求正在排队（等待中约 {depth} 条），超时会明确回复。"
-                    )
-                )
+                await event.send(MessageChain().message("呜呜等一下"))
 
-        task = asyncio.create_task(
-            self.engine.submit(
-                messages,
-                scope,
-                on_queued=on_queued,
-                sequence=request_sequence,
-                stats_session=stats_session,
+        async def attempt():
+            task = asyncio.create_task(
+                self.engine.submit(
+                    messages,
+                    scope,
+                    on_queued=on_queued,
+                    sequence=request_sequence,
+                    stats_session=stats_session,
+                    **(
+                        {"images": image_input.blocks} if image_input and image_input.blocks else {}
+                    ),
+                )
             )
-        )
-        self._pending.add(task)
-        try:
-            text = await task
-            return LLMResponse(role="assistant", completion_text=text)
-        finally:
-            self._pending.discard(task)
+            self._pending.add(task)
+            try:
+                return await task
+            except asyncio.CancelledError:
+                # Cancelling the provider's child during unload is a failed request.
+                # An actual cancellation of the caller must still propagate.
+                if self._closed and not asyncio.current_task().cancelling():
+                    raise CursorError("closed") from None
+                raise
+            finally:
+                self._pending.discard(task)
+
+        text = await retry_stream_errors(attempt, request_max_retries=request_max_retries)
+        return LLMResponse(role="assistant", completion_text=text)
 
     async def text_chat_stream(self, *args, **kwargs):
         # AstrBot may request streaming. Emit one final response, never fake deltas.
@@ -201,4 +291,5 @@ class CursorCLIProvider(Provider):
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-        await runtime.release_engine(self.engine)
+        if self.engine is not None:
+            await runtime.release_engine(self.engine)

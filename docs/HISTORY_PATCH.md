@@ -7,6 +7,7 @@
 - 对话前缀排除所有 `role=system`。其它角色仍需完整前缀匹配，避免漏掉中间对话修改。assistant 内容仅在计算匹配 hash 时去除完整 `<think>` / `<thinking>` 块、末尾闭合标签和首尾空白；规则对应 AstrBot 4.29.4 的 OpenAI completion parser，不猜测删除未闭合的起始标签。user、原始回复和发送正文不改。
 - system 单独保存“最近一次成功发送的状态”。变化时向原 session 发送一条 system 更新：追加只发新增后缀，替换发送新内容，删除明确撤回旧条目。次轮 system 为 `None` 且 contexts 没有其它 system 时，会发送撤回操作。
 - 明确的时钟元数据仅在比较时被忽略，纯时间变化不会触发 system 更新；最新时钟仍随本轮请求单独传入，见 [时钟规则](SYSTEM_CLOCK.md)。
+- 重建会话时保留历史文本和旧图缺失标记，ACP 图片块只包含当前轮图片，见 [图片输入](IMAGE_INPUT.md)。
 - system 更新和新 user 对话合并在同一次提示词中发送；没有新 user 时沿用最近成功回复，system 变化留待下一次新 user 输入发送，不额外发起一次生成。
 - 同一请求重复（尚未含本次 assistant 回复）与确认历史重复（已含回复）都能复用结果。缓存命中发送字节为 0，不新建会话。缓存仅在内存中，按原会话作用域隔离。
 - 没有新 user 且没有可用结果时返回空文本；初始请求完全没有 messages 的输入校验保持原样。失败和取消不缓存新结果或新 system 状态。
@@ -35,4 +36,4 @@ python -m unittest -v tests.test_history_reuse
 git diff e8e5ce2..main -- cursor_plugin/logic.py cursor_plugin/engine.py
 ```
 
-回退时恢复目标旧提交对应的完整插件目录，再重载 Cursor Provider。重载会清理旧实例及内存会话缓存，下一轮重发完整历史；不需要修改登录卷、SSH 密钥或 AstrBot 核心。保留插件数据目录可继续使用既有本地统计。
+回退时恢复目标旧提交对应的完整插件目录，再重载 Cursor Provider。重载会清理旧实例及内存会话缓存，下一轮会按所装版本重新同步历史。保留插件数据目录可继续使用既有本地统计。

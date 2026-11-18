@@ -1,8 +1,12 @@
 """Native registry/API checks with a small provider-manager test double."""
 
+import asyncio
 import importlib
 import sys
+import tempfile
 import unittest
+from copy import deepcopy
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -69,7 +73,9 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.context = SimpleNamespace(
             provider_manager=self.manager,
             astrbot_config_mgr=SimpleNamespace(default_conf=self.config),
+            registered_web_apis=[],
         )
+        self.context.register_web_api = partial(main.Context.register_web_api, self.context)
         self.plugin = main.CursorCLIPlugin(self.context, {"model_id": "mock-plan-model"})
         catalog = patch.object(
             main.runtime,
@@ -118,7 +124,116 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(old._closed)
 
     async def test_plugin_exit_does_not_delete_host_owned_models(self):
-        # AstrBot calls plugin teardown only when explicitly defined on the class.
-        # Like the reference plugin, no teardown here removes Provider instances.
-        self.assertNotIn("terminate", main.CursorCLIPlugin.__dict__)
-        self.assertFalse(hasattr(self.context, "_astrbot_cursor_cli_reload_state"))
+        await self.plugin.initialize()
+        cursor = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
+        self.manager.inst_map[self.model["id"]] = cursor
+        before = self.manager.inst_map.copy()
+        await self.plugin.terminate()
+        self.assertEqual(self.manager.inst_map, before)
+        self.assertIs(self.manager.curr_provider_inst, self.manager.oauth)
+        self.assertFalse(self.plugin._usage_page.active)
+        self.assertTrue(cursor.engine.closed)
+        with self.assertRaises(main.CursorError) as stopped:
+            await cursor.text_chat(prompt="stopped")
+        self.assertEqual(stopped.exception.code, "closed")
+
+    async def test_reloading_plugin_replaces_registered_usage_route(self):
+        await self.plugin.initialize()
+        await self.plugin.terminate()
+        replacement = main.CursorCLIPlugin(self.context, {"model_id": "mock-plan-model"})
+        self.addAsyncCleanup(replacement.terminate)
+        await replacement.initialize()
+
+        ((route, handler, methods, _description),) = self.context.registered_web_apis
+        self.assertEqual(route, "/astrbot_plugin_cursor/usage/dashboard")
+        self.assertEqual(methods, ["POST"])
+        self.assertEqual(handler, replacement._usage_page.handle)
+
+    async def test_failed_cursor_start_keeps_history_available_and_blocks_existing_provider(self):
+        await self.plugin.initialize()
+        old = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
+        self.manager.inst_map[self.model["id"]] = old
+        before = deepcopy(self.config)
+        with tempfile.TemporaryDirectory() as directory:
+            store = main.runtime.UsageStore(directory)
+            try:
+                store.record({"event": "request_finished", "request_id": "prior", "code": "ok"})
+                metrics = importlib.import_module(main.runtime.__package__ + ".metrics")
+                with (
+                    patch.object(main.runtime, "_usage_store", store),
+                    patch.object(metrics, "_usage_store", store),
+                ):
+                    with patch.object(
+                        main.runtime,
+                        "_fetch_available_models",
+                        AsyncMock(side_effect=main.CursorError("not_logged_in")),
+                    ) as fetch:
+                        await self.plugin.initialize()
+                        report = await main.runtime.usage_dashboard(7)
+                        self.assertEqual(report["startup_error"]["code"], "not_logged_in")
+                        self.assertFalse(report["validated"])
+                        self.assertEqual(report["totals"]["requests"], 1)
+                        self.assertTrue(self.plugin._usage_page.active)
+                        with self.assertRaises(main.CursorError) as chat:
+                            await old.text_chat(prompt="测试")
+                        self.assertEqual(chat.exception.code, "closed")
+                        with self.assertRaises(main.CursorError) as catalog:
+                            await old.get_models()
+                        self.assertEqual(catalog.exception.code, "closed")
+                        fetch.assert_awaited_once()
+                        self.assertEqual(old.engine.workers, [])
+                        self.assertEqual(self.config, before)
+                        self.assertIs(self.manager.curr_provider_inst, self.manager.oauth)
+                    await self.plugin.initialize()
+                    report = await main.runtime.usage_dashboard(7)
+                    self.assertIsNone(report["startup_error"])
+                    self.assertTrue(report["validated"])
+                    self.assertEqual(report["totals"]["requests"], 2)
+                    self.assertEqual(report["totals"]["failed"], 1)
+            finally:
+                store.close()
+
+    async def test_missing_model_and_startup_timeout_leave_the_page_registered(self):
+        for expected, fetch in (
+            ("model_unavailable", AsyncMock(return_value=[{"modelId": "other-plan-model"}])),
+            ("startup_timeout", AsyncMock(side_effect=asyncio.TimeoutError())),
+        ):
+            with self.subTest(expected=expected):
+                with patch.object(main.runtime, "_fetch_available_models", fetch):
+                    await self.plugin.initialize()
+                self.assertTrue(self.plugin._usage_page.active)
+                report = await main.runtime.usage_dashboard(7)
+                self.assertFalse(report["validated"])
+                self.assertEqual(report["startup_error"]["code"], expected)
+                with self.assertRaises(main.CursorError) as failed:
+                    main.runtime.resolve_model_id("other-plan-model")
+                self.assertEqual(failed.exception.code, expected)
+                self.assertEqual(self.manager.reloads, [])
+        await self.plugin.initialize()
+
+    async def test_oversize_request_records_failure_without_entering_engine(self):
+        await self.plugin.initialize()
+        cursor = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
+        self.addAsyncCleanup(cursor.terminate)
+        cursor.settings["context_max_bytes"] = 1024
+        with tempfile.TemporaryDirectory() as directory:
+            store = main.runtime.UsageStore(directory)
+            try:
+                metrics = importlib.import_module(main.runtime.__package__ + ".metrics")
+                with (
+                    patch.object(main.runtime, "_usage_store", store),
+                    patch.object(metrics, "_usage_store", store),
+                    patch.object(cursor.engine, "submit", new_callable=AsyncMock) as submit,
+                ):
+                    with self.assertRaises(main.CursorError) as limit:
+                        await cursor.text_chat(prompt="x" * 2048, session_id="test-anonymous-label")
+                    self.assertEqual(limit.exception.code, "context_limit")
+                    report = await main.runtime.usage_dashboard(7)
+                submit.assert_not_awaited()
+                self.assertEqual(report["totals"]["failed"], 1)
+                self.assertEqual(report["totals"]["wire_bytes"], 0)
+                self.assertEqual(report["groups"]["model"][0]["label"], "")
+                self.assertEqual(report["groups"]["code"][0]["label"], "context_limit")
+                self.assertEqual(report["runtime"]["last_failure"], "context_limit")
+            finally:
+                store.close()
