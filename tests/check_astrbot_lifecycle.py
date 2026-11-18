@@ -25,7 +25,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 async def run_chat(
-    provider, prompt, *, max_attempts=1, cid=None, history=None, system=None, image_urls=None
+    provider,
+    prompt,
+    *,
+    max_attempts=1,
+    cid=None,
+    history=None,
+    system=None,
+    image_urls=None,
+    extra_parts=None,
+    saved=None,
 ):
     from astrbot.core.agent.hooks import BaseAgentRunHooks
     from astrbot.core.agent.run_context import ContextWrapper
@@ -49,6 +58,7 @@ async def run_chat(
             contexts=history or [],
             system_prompt=system,
             image_urls=image_urls or [],
+            extra_user_content_parts=extra_parts or [],
         ),
         run_context=ContextWrapper(context=None),
         tool_executor=MagicMock(),
@@ -59,6 +69,20 @@ async def run_chat(
     replies = [
         response.completion_text async for response in runner._iter_llm_responses_with_fallback()
     ]
+    if saved is not None:
+        messages = []
+        for message in runner.run_context.messages:
+            if message.role == "system" or getattr(message, "_no_save", False):
+                continue
+            dumped = message.model_dump()
+            if isinstance(message.content, list):
+                dumped["content"] = [
+                    part.model_dump()
+                    for part in message.content
+                    if not getattr(part, "_no_save", False)
+                ]
+            messages.append(dumped)
+        saved[:] = [*messages, {"role": "assistant", "content": replies[-1]}]
     return replies, backup.text_chat.await_count
 
 
@@ -288,6 +312,32 @@ async def verify(root):
         ) == (["INLINE-IMAGE"], 0)
         print(
             "PASS native AstrBot ProviderRequest carried a prepared image inline to the selected mock ACP model"
+        )
+
+        from astrbot.core.agent.message import TextPart
+
+        saved = []
+        initial_keys = set(pending_provider.engine.sessions)
+        for index, with_image in enumerate((True, False, False, False, True)):
+            extra = TextPart(text=f"One-turn context {index}").mark_as_temp()
+            label = "MOCK_IMAGE_REQUIRED" if with_image else "MOCK_NO_IMAGE"
+            assert await run_chat(
+                pending_provider,
+                f"{label} {index}",
+                cid="image-sequence",
+                history=saved,
+                image_urls=[str(image_path)] if with_image else [],
+                extra_parts=[extra],
+                saved=saved,
+            ) == (["INLINE-IMAGE" if with_image else "NO-IMAGE"], 0)
+            (key,) = pending_provider.engine.sessions.keys() - initial_keys
+            current_session = pending_provider.engine.sessions[key]["session_id"]
+            if index == 0:
+                original_session = current_session
+            else:
+                assert current_session == original_session
+        print(
+            "PASS actual AstrBot payload image/text/text/text/image reuses one ACP session and sends images only on the image turns"
         )
     finally:
         await host.stop()

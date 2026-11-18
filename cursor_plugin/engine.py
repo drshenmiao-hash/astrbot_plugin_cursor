@@ -6,7 +6,7 @@ import uuid
 from dataclasses import dataclass, field
 
 from .acp import ACPClient
-from .errors import CursorError
+from .errors import CursorError, ImageLimitError
 from .images import prompt_images
 from .launcher import ProcessOwner, ssh_error_code
 from .logic import history_state, reconcile_history
@@ -39,6 +39,10 @@ class Job:
     stats_session: str | None = None
     model_id: str | None = None
     images: dict | None = None
+    sent_image_blocks: int = 0
+    sent_image_base64_bytes: int = 0
+    historical_images_not_attached: int = 0
+    image_limit: dict = field(default_factory=dict)
 
 
 class Engine:
@@ -293,10 +297,13 @@ class Engine:
         if job.scope in self.sessions:
             record(
                 "history_comparison",
+                request_id=job.request_id,
+                session=job.stats_session or job.scope,
                 **{
                     key: plan[key]
                     for key in ("length_rule", "hash_rule", "tail_rule", "system_changed")
                 },
+                **plan["history_difference"],
             )
         if not plan["has_new_user_input"]:
             return self._no_new_input(job, cached)
@@ -311,6 +318,9 @@ class Engine:
             job.reset_reason = "no_stable_session_key"
         session_id = cached["session_id"] if cached else await client.new_session(self.cfg["model"])
         delta, image_blocks = prompt_images(delta, job.images or {})
+        job.historical_images_not_attached = sum(
+            entry.get("historical_images_not_attached", 0) for entry in delta
+        )
         text = render_messages(
             delta,
             incremental=bool(cached),
@@ -335,7 +345,7 @@ class Engine:
                     "history": history_state(
                         job.messages + [{"role": "assistant", "content": reply}]
                     ),
-                    "request_hashes": history_state(job.messages)["dialogue_hashes"],
+                    "request_hashes": history_state(job.messages)["request_hashes"],
                     "last_reply": reply,
                 }
             if self.owner is not None:
@@ -358,6 +368,9 @@ class Engine:
             job.wire_bytes = stats.get("wire_bytes", job.wire_bytes)
             job.output_bytes = stats.get("output_bytes", job.output_bytes)
             job.model_id = stats.get("model_id")
+            if job.wire_bytes:
+                job.sent_image_blocks = len(image_blocks)
+                job.sent_image_base64_bytes = sum(len(block["data"]) for block in image_blocks)
 
     async def _worker(self):
         while True:
@@ -406,6 +419,8 @@ class Engine:
             except CursorError as exc:
                 code = exc.code
                 error = exc
+                if isinstance(exc, ImageLimitError):
+                    job.image_limit = exc.metadata
             except asyncio.CancelledError:
                 code = "closed"
                 if operation is not None:
@@ -461,6 +476,12 @@ class Engine:
             reset_reason=job.reset_reason,
             active=self.active,
             queue_depth=self.queue.qsize(),
+            sent_image_blocks=job.sent_image_blocks,
+            sent_image_base64_bytes=job.sent_image_base64_bytes,
+            historical_images_not_attached=job.historical_images_not_attached
+            if job.wire_bytes
+            else 0,
+            **job.image_limit,
         )
 
     def health(self):

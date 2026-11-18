@@ -11,7 +11,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from cursor_plugin.engine import Engine
-from cursor_plugin.logic import history_state
+from cursor_plugin.logic import history_plan, history_state
 from cursor_plugin.settings import settings_from
 from cursor_plugin.transcript import normalize_messages
 
@@ -52,6 +52,49 @@ def dialogue_after(messages, reply):
     ]
 
 
+class HistoryDiagnostics(unittest.TestCase):
+    def test_first_changed_field_and_window_shift_do_not_expose_values(self):
+        user = {"role": "user", "content": "PRIVATE_TEXT", "images": ["PRIVATE_IMAGE_HASH"]}
+        reply = {"role": "assistant", "content": "reply"}
+        followup = {"role": "user", "content": "next"}
+        old = [user, reply, followup, reply]
+
+        for field, changed in (
+            ("content", "edited"),
+            ("images", ["replacement"]),
+            ("role", "developer"),
+        ):
+            with self.subTest(field=field):
+                plan = history_plan(old, [{**user, field: changed}, *old[1:], followup])
+                details = plan["history_difference"]
+                self.assertFalse(plan["reused"])
+                self.assertEqual(details["history_change"], "entry_changed")
+                self.assertEqual(details["history_first_difference"], 0)
+                self.assertEqual(details["history_changed_fields"], [field])
+                self.assertNotIn("PRIVATE_", json.dumps(details))
+        plan = history_plan(old, [*old[2:], {"role": "user", "content": "new"}])
+        self.assertFalse(plan["reused"])
+        self.assertEqual(plan["history_difference"]["history_change"], "window_shifted")
+
+    def test_known_temporary_assistant_marker_is_only_normalized_for_matching(self):
+        old = [
+            {"role": "user", "content": "First"},
+            {
+                "role": "assistant",
+                "content": "<astrna_reply_target>marker</astrna_reply_target>Reply",
+            },
+        ]
+        new = [
+            old[0],
+            {"role": "assistant", "content": "Reply"},
+            {"role": "user", "content": "Next"},
+        ]
+        plan = history_plan(old, new)
+        self.assertTrue(plan["reused"])
+        self.assertEqual(plan["delta"], [new[-1]])
+        self.assertIn("<astrna_reply_target>", old[1]["content"])
+
+
 class HistoryReuseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.peer = MemoryACP()
@@ -87,6 +130,30 @@ class HistoryReuseTests(unittest.IsolatedAsyncioTestCase):
     async def turn(self, system, user, contexts=None):
         messages = normalize_messages(prompt=user, contexts=contexts, system_prompt=system)
         return messages, await self.submit(messages)
+
+    async def test_astrna_temporary_group_text_is_sent_once_and_does_not_break_next_turn(self):
+        reminder = (
+            "<system_reminder>\nAstrNa 触发后新增群聊消息：\n"
+            "--- BEGIN NEW GROUP MESSAGES ---\nfixture\n"
+            "--- END NEW GROUP MESSAGES ---\n</system_reminder>"
+        )
+        incoming = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Current message"},
+                    {"type": "text", "text": reminder},
+                ],
+            }
+        ]
+        self.assertEqual(await self.submit(normalize_messages(contexts=incoming)), "OK")
+        self.assertIn(reminder, self.peer.prompts[-1]["messages"][0]["content"])
+        saved = [
+            {"role": "user", "content": "Current message"},
+            {"role": "assistant", "content": "OK"},
+        ]
+        await self.turn(None, "Follow-up", contexts=saved)
+        self.assert_delta("Follow-up")
 
     def assert_delta(self, user, operations=None):
         self.assertEqual(len(self.peer.sessions), 1, "Unexpected session rebuild")

@@ -2,7 +2,7 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> ver0.4.0 支持把图片发给当前选定的 Cursor 模型。模型明确拒绝图片时返回 `image_unsupported`，可在插件设置自定义提示。请下载安装 ZIP，在 AstrBot 插件页上传。[ver0.4.0 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/ver0.4.0)
+> ver0.4.1 只发送当前轮图片，并修复 AstrBot 附加内容被重复计入历史导致的会话重建。请下载源码 ZIP，在 AstrBot 插件页上传。[ver0.4.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/ver0.4.1)
 
 保存明确的 `model_id` 后重载插件，即会新增或更新 Cursor 来源和原生模型。原有默认模型和备用模型保持不变。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 

@@ -8,6 +8,9 @@ from .system_clock import current_clock_fields, raw_append_suffix, semantic_syst
 
 _REASONING_BLOCK = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL)
 _TRAILING_REASONING_CLOSE = re.compile(r"</(?:think|thinking)>\s*$")
+_ASTRNA_REPLY_MARKER = re.compile(
+    r"<(astrna_(?:reply_target|quoted_sender|quoted_reply_target))>.*?</\1>", re.DOTALL
+)
 _MACHINE_CHUNK_TAIL = re.compile(
     r"(?:error[ \t]*:[ \t]*)*retriableerror[ \t]*:[ \t]*"
     r"(?:\[unavailable\][ \t]*)?(?:connection[ \t]+stalled|ping[ \t]+timed[ \t]+out)"
@@ -73,27 +76,83 @@ def compare_history_hashes(old_hashes, new_hashes, *, tail_count=2):
 def assistant_match_text(text):
     """Mirror AstrBot's reasoning-tag cleanup, exclusively for history hashes.
 
-    Matches the cleanup in AstrBot 4.29.4's OpenAI completion parser: complete
-    think/thinking blocks, a trailing closing tag, then boundary whitespace.
-    Do not guess away incomplete opening tags or alter visible answer content.
+    Match complete reasoning blocks, a trailing reasoning close, and the
+    internal reply markers removed by AstrNa when it saves conversation history.
     """
-    return _TRAILING_REASONING_CLOSE.sub("", _REASONING_BLOCK.sub("", text)).strip()
+    text = _TRAILING_REASONING_CLOSE.sub("", _REASONING_BLOCK.sub("", text)).strip()
+    text, removed = _ASTRNA_REPLY_MARKER.subn("", text)
+    if removed:
+        text = re.sub(r"[ \t]+\n|\n[ \t]+", "\n", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def history_state(history):
-    """Keep system separately; normalize only assistant text used for matching.
-
-    User text, original replies and transmitted messages stay intact.
-    """
+    """Keep system, durable dialogue, and the exact replay of a turn separately."""
     systems = [dict(item) for item in history if item.get("role") == "system"]
     dialogue = [item for item in history if item.get("role") != "system"]
-    canonical = [
-        {**item, "content": assistant_match_text(item["content"])}
-        if item.get("role") == "assistant" and isinstance(item.get("content"), str)
-        else item
-        for item in dialogue
-    ]
-    return {"systems": systems, "dialogue_hashes": history_hashes(canonical)}
+    submitted = []
+    canonical = []
+    for item in dialogue:
+        entry = {key: value for key, value in item.items() if not key.startswith("_")}
+        if entry.get("role") == "assistant" and isinstance(entry.get("content"), str):
+            entry["content"] = assistant_match_text(entry["content"])
+        submitted.append(entry)
+        canonical.append(
+            {**entry, "content": item["_history_content"]} if "_history_content" in item else entry
+        )
+    hashes = history_hashes(canonical)
+    return {
+        "systems": systems,
+        "dialogue_hashes": hashes,
+        "request_hashes": hashes if submitted == canonical else history_hashes(submitted),
+        "dialogue_fields": [
+            (
+                item.get("role"),
+                hashlib.sha256(
+                    json.dumps(item.get("content"), ensure_ascii=False).encode()
+                ).digest(),
+                tuple(item.get("images", ())),
+            )
+            for item in canonical
+        ],
+    }
+
+
+def history_difference(previous, current):
+    """Return positions and field names only. Never return a comparison value."""
+    old, new = previous["dialogue_hashes"], current["dialogue_hashes"]
+    first = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b), min(len(old), len(new)))
+    if first == len(old):
+        difference = "none"
+    elif first == len(new):
+        difference = "window_shortened"
+    else:
+        difference = "entry_changed"
+        if first == 0 and len(new) >= 2:
+            for index in range(1, len(old) - 1):
+                overlap = len(old) - index
+                if overlap <= len(new) and new[:overlap] == old[index:]:
+                    difference = "window_shifted"
+                    break
+    fields = []
+    if difference == "entry_changed":
+        fields = [
+            name
+            for name, a, b in zip(
+                ("role", "content", "images"),
+                previous["dialogue_fields"][first],
+                current["dialogue_fields"][first],
+            )
+            if a != b
+        ]
+    return {
+        "history_change": difference,
+        "history_previous_count": len(old),
+        "history_incoming_count": len(new),
+        "history_first_difference": first if difference == "entry_changed" else None,
+        "history_changed_fields": fields,
+    }
 
 
 def system_delta(old_systems, new_systems):
@@ -148,7 +207,7 @@ def reconcile_history(previous, new_history, *, last_request_hashes=None, tail_c
     )
     # A retry may repeat the input *without* our already-generated assistant reply.
     # Match that request too, rather than reopening a session or generating twice.
-    if previous and last_request_hashes and state["dialogue_hashes"] == last_request_hashes:
+    if previous and last_request_hashes and state["request_hashes"] == last_request_hashes:
         result.update(reused=True, delta_start=len(dialogue), reason="request_replay")
     dialogue_delta = dialogue[result["delta_start"] :]
     update = system_delta(previous["systems"], state["systems"]) if previous else None
@@ -159,6 +218,7 @@ def reconcile_history(previous, new_history, *, last_request_hashes=None, tail_c
         "system_changed": update is not None,
         "has_new_user_input": any(item.get("role") == "user" for item in dialogue_delta),
         "clock_fields": current_clock_fields(state["systems"]),
+        "history_difference": history_difference(previous, state) if previous else {},
     }
 
 

@@ -13,7 +13,13 @@ from astrbot.api.provider import LLMResponse, Provider
 from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
 
 from . import runtime
-from .errors import CursorError, ImageUnsupportedError, UnsupportedFeatureError, retry_stream_errors
+from .errors import (
+    CursorError,
+    ImageLimitError,
+    ImageUnsupportedError,
+    UnsupportedFeatureError,
+    retry_stream_errors,
+)
 from .images import ImageInput
 from .metrics import record
 from .transcript import normalize_messages
@@ -237,6 +243,7 @@ class CursorCLIProvider(Provider):
                 code=exc.code,
                 duration_ms=round((time.monotonic() - started) * 1000),
                 reset_reason="preflight",
+                **(exc.metadata if isinstance(exc, ImageLimitError) else {}),
             )
             raise
 

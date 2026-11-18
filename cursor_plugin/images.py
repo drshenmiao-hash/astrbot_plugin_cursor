@@ -9,7 +9,7 @@ import stat
 from contextlib import ExitStack
 from pathlib import Path
 
-from .errors import CursorError
+from .errors import CursorError, ImageLimitError
 
 MAX_IMAGES = 4
 MAX_IMAGE_BYTES = 2 * 1024 * 1024
@@ -44,7 +44,7 @@ def read_local_image(root, ref):
                 if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
                     raise CursorError("image_source")
                 if info.st_size > MAX_IMAGE_BYTES:
-                    raise CursorError("image_limit")
+                    raise ImageLimitError("file_bytes", MAX_IMAGE_BYTES, info.st_size)
                 return file.read(MAX_IMAGE_BYTES + 1)
     except (ValueError, OSError):
         raise CursorError("image_source") from None
@@ -53,8 +53,6 @@ def read_local_image(root, ref):
 def image_data(root, ref):
     if not isinstance(ref, str) or not ref:
         raise CursorError("image_source")
-    if ref.startswith(("base64://", "data:")) and len(ref) > 4 * ((MAX_IMAGE_BYTES + 2) // 3) + 64:
-        raise CursorError("image_limit")
     declared = None
     if ref.startswith("base64://"):
         encoded = ref[len("base64://") :]
@@ -66,7 +64,8 @@ def image_data(root, ref):
     else:
         return read_local_image(root, ref), declared
     if len(encoded) > 4 * ((MAX_IMAGE_BYTES + 2) // 3):
-        raise CursorError("image_limit")
+        padding = 2 if encoded.endswith("==") else int(encoded.endswith("="))
+        raise ImageLimitError("file_bytes", MAX_IMAGE_BYTES, len(encoded) * 3 // 4 - padding)
     try:
         return base64.b64decode(encoded, validate=True), declared
     except (binascii.Error, ValueError):
@@ -79,21 +78,22 @@ def validate_image(data, declared):
     if not data:
         raise CursorError("image_invalid")
     if len(data) > MAX_IMAGE_BYTES:
-        raise CursorError("image_limit")
+        raise ImageLimitError("file_bytes", MAX_IMAGE_BYTES, len(data))
     try:
         with Image.open(io.BytesIO(data), formats=list(IMAGE_TYPES)) as image:
             mime_type = IMAGE_TYPES[image.format]
             if declared and mime_type != declared:
                 raise CursorError("image_invalid")
-            if image.width * image.height > MAX_IMAGE_PIXELS:
-                raise CursorError("image_limit")
+            pixels = image.width * image.height
+            if pixels > MAX_IMAGE_PIXELS:
+                raise ImageLimitError("pixels", MAX_IMAGE_PIXELS, pixels)
             if min(image.size) < 8 or getattr(image, "is_animated", False):
                 raise CursorError("image_invalid")
             image.verify()
         with Image.open(io.BytesIO(data), formats=list(IMAGE_TYPES)) as image:
             image.load()
     except Image.DecompressionBombError:
-        raise CursorError("image_limit") from None
+        raise ImageLimitError("pixels", MAX_IMAGE_PIXELS) from None
     except (OSError, ValueError, SyntaxError, EOFError):
         raise CursorError("image_invalid") from None
     return mime_type
@@ -108,35 +108,56 @@ class ImageInput:
 
     def read(self, ref):
         if self.count >= MAX_IMAGES:
-            raise CursorError("image_limit")
+            raise ImageLimitError("count", MAX_IMAGES, self.count + 1)
         data, declared = image_data(self.root, ref)
-        if self.size + len(data) > MAX_IMAGE_TOTAL_BYTES:
-            raise CursorError("image_limit")
         mime_type = validate_image(data, declared)
-        digest = hashlib.sha256(data).hexdigest()
+        if self.size + len(data) > MAX_IMAGE_TOTAL_BYTES:
+            raise ImageLimitError("total_bytes", MAX_IMAGE_TOTAL_BYTES, self.size + len(data))
+        encoded = base64.b64encode(data)
+        digest = hashlib.sha256(encoded).hexdigest()
         self.blocks[digest] = {
             "type": "image",
             "mimeType": mime_type,
-            "data": base64.b64encode(data).decode("ascii"),
+            "data": encoded.decode("ascii"),
         }
         self.count += 1
         self.size += len(data)
         return digest
 
 
+def historical_image_key(ref):
+    """Compare portable history with a sent block without decoding or opening a file."""
+    if not isinstance(ref, str):
+        return "unavailable"
+    if ref.startswith("base64://"):
+        ref = ref[len("base64://") :]
+    elif ref.startswith("data:"):
+        header, _, encoded = ref.partition(",")
+        if header.endswith(";base64"):
+            ref = encoded
+    else:
+        return "reference:" + hashlib.sha256(ref.encode()).hexdigest()
+    return hashlib.sha256(ref.encode()).hexdigest()
+
+
 def prompt_images(messages, images):
-    """Label attachments in the transcript, then send each as an inline ACP block."""
+    """Send only this turn's attachments, with explicit markers on replayed history."""
     transcript = []
     blocks = []
     for entry in messages:
+        current = entry.get("_current", False)
+        entry = {name: value for name, value in entry.items() if not name.startswith("_")}
         if attachments := entry.get("images"):
-            labels = []
-            for digest in attachments:
-                block = images.get(digest)
-                if block is None:
-                    raise CursorError("image_invalid")
-                blocks.append(block)
-                labels.append(len(blocks))
-            entry = {**entry, "images": labels}
+            if current:
+                first = len(blocks) + 1
+                for digest in attachments:
+                    block = images.get(digest)
+                    if block is None:
+                        raise CursorError("image_invalid")
+                    blocks.append(block)
+                entry["images"] = list(range(first, len(blocks) + 1))
+            else:
+                entry.pop("images")
+                entry["historical_images_not_attached"] = len(attachments)
         transcript.append(entry)
     return transcript, blocks

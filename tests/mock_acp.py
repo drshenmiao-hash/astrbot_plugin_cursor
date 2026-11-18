@@ -43,6 +43,8 @@ async def main():
                     and base64.b64decode(images[0]["data"], validate=True).startswith(b"\x89PNG")
                 )
                 chunks = ["INLINE-IMAGE" if png else "IMAGE-MISSING"]
+            if "MOCK_NO_IMAGE" in text:
+                chunks = ["NO-IMAGE" if len(params["prompt"]) == 1 else "UNEXPECTED-IMAGE"]
             for chunk in chunks:
                 send(
                     {

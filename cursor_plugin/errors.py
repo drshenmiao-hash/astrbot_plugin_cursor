@@ -19,7 +19,7 @@ MESSAGES = {
     "unsupported": "Cursor 当前适配器不支持此输入能力。",
     "image_source": "图片来源不可读，须使用 AstrBot 临时目录内的普通文件或内嵌图片。",
     "image_invalid": "图片格式或内容无效，请发送尺寸合适的静态 PNG、JPEG 或 WebP。",
-    "image_limit": "图片数量、文件大小或像素数超过限制，本次请求未发送。",
+    "image_limit": "本轮图片超过限制，本次请求未发送。",
     "image_unsupported": "当前 Cursor 运行端或所选模型不支持图片输入。",
     "image_unavailable": "当前 Cursor CLI 或指定模型拒绝了图片，本次没有按纯文本重发。",
     "context_limit": "完整上下文超过 context_max_bytes，已报错；不会截断或悄悄丢弃历史。",
@@ -88,6 +88,26 @@ class ImageUnsupportedError(CursorError):
     def __init__(self, message):
         self.code = "image_unsupported"
         RuntimeError.__init__(self, f"[cursor:{self.code}] {message}")
+
+
+class ImageLimitError(CursorError):
+    def __init__(self, kind, limit, actual=None):
+        self.code = "image_limit"
+        self.metadata = {"image_limit_kind": kind, "image_limit_max": limit}
+        if actual is not None:
+            self.metadata["image_limit_actual"] = actual
+        label = {
+            "count": "张数",
+            "file_bytes": "单张字节数",
+            "total_bytes": "总字节数",
+            "pixels": "像素数",
+            "frame_bytes": "ACP 帧字节数",
+        }[kind]
+        measured = f"，实际 {actual}" if actual is not None else ""
+        RuntimeError.__init__(
+            self,
+            f"[cursor:image_limit] 本轮图片{label}超限（上限 {limit}{measured}），本次请求未发送。",
+        )
 
 
 class CursorStreamError(CursorError):

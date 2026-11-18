@@ -32,6 +32,17 @@ _FIELDS = {
     "hash_rule",
     "tail_rule",
     "system_changed",
+    "history_change",
+    "history_previous_count",
+    "history_incoming_count",
+    "history_first_difference",
+    "history_changed_fields",
+    "sent_image_blocks",
+    "sent_image_base64_bytes",
+    "historical_images_not_attached",
+    "image_limit_kind",
+    "image_limit_max",
+    "image_limit_actual",
 }
 
 

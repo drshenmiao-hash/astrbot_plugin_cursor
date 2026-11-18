@@ -5,7 +5,7 @@ import json
 import logging
 import time
 
-from .errors import CursorError, CursorStreamError
+from .errors import CursorError, CursorStreamError, ImageLimitError
 from .images import MAX_IMAGE_FRAME_BYTES
 from .logic import (
     classify_chunk_tail_error,
@@ -51,7 +51,9 @@ class ACPClient:
         raw = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
         limit = self.frame_limit + (MAX_IMAGE_FRAME_BYTES if image_prompt else 0)
         if len(raw) > limit:
-            raise CursorError("image_limit" if image_prompt else "context_limit")
+            if image_prompt:
+                raise ImageLimitError("frame_bytes", limit, len(raw))
+            raise CursorError("context_limit")
         async with self._write_lock:
             try:
                 self.process.stdin.write(raw)
@@ -99,7 +101,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.0"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.1"},
                 },
                 timeout=30,
             )

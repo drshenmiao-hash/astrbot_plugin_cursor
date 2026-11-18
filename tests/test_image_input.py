@@ -5,6 +5,7 @@ import base64
 import io
 import json
 import os
+import random
 import tempfile
 import unittest
 from pathlib import Path
@@ -130,6 +131,111 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(provider.terminate)
         provider.engine.client = self.client
         return provider
+
+    @staticmethod
+    def image_part(path):
+        data = base64.b64encode(path.read_bytes()).decode("ascii")
+        return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{data}"}}
+
+    async def test_image_then_text_then_image_reuses_sessions_with_assembled_extra_parts(self):
+        from PIL import Image
+
+        provider = self.provider()
+        large = self.root / "larger.png"
+        with Image.frombytes("RGB", (400, 400), random.Random(4).randbytes(480_000)) as fixture:
+            fixture.save(large)
+        history = []
+        with self.assertLogs("astrbot", level="INFO") as logs:
+            for turn, media in enumerate((large, None, None, None, self.second)):
+                temporary = {"type": "text", "text": f"Fixture reminder {turn}"}
+                parts = [{"type": "text", "text": f"Current message {turn}"}]
+                if media:
+                    parts.append(self.image_part(media))
+                # AstrBot has serialized the same part into its current user entry and passes
+                # the original, still marked transient, through the separate argument as well.
+                incoming = {"role": "user", "content": [*parts[:1], temporary, *parts[1:]]}
+                reply = await provider.text_chat(
+                    contexts=[*history, incoming],
+                    conversation_id="sequence",
+                    extra_user_content_parts=[{**temporary, "_no_save": True}],
+                )
+                self.assertEqual(reply.completion_text, "OK")
+                history.extend(
+                    [{"role": "user", "content": parts}, {"role": "assistant", "content": "OK"}]
+                )
+        self.assertEqual(len({turn["sessionId"] for turn in self.peer.prompts}), 1)
+        self.assertEqual([len(turn["prompt"]) - 1 for turn in self.peer.prompts], [1, 0, 0, 0, 1])
+        for turn, prompt in enumerate(self.peer.prompts):
+            self.assertEqual(prompt["prompt"][0]["text"].count(f"Fixture reminder {turn}"), 1)
+            self.assertNotIn("_history_content", prompt["prompt"][0]["text"])
+        finished = [
+            json.loads(line.split("cursor_provider ", 1)[1])
+            for line in logs.output
+            if '"event":"request_finished"' in line
+        ]
+        self.assertEqual([row["reused"] for row in finished], [False, True, True, True, True])
+        self.assertGreater(finished[0]["wire_bytes"], 600_000)
+        self.assertTrue(all(row["wire_bytes"] < 1024 for row in finished[1:4]))
+        print("image/text regression wire_bytes:", [row["wire_bytes"] for row in finished])
+
+    async def test_reset_preserves_history_text_without_reading_or_counting_old_images(self):
+        provider = self.provider()
+        history = []
+        for index in range(images.MAX_IMAGES + 2):
+            history.extend(
+                [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Earlier message {index}"},
+                            self.image_part(self.first)
+                            if index <= images.MAX_IMAGES
+                            else {
+                                "type": "image_url",
+                                "image_url": {"url": f"/missing/old-image-{index}.png"},
+                            },
+                        ],
+                    },
+                    {"role": "assistant", "content": "Earlier caption"},
+                ]
+            )
+        for refs, count in (([], 0), ([str(self.first)], 1)):
+            await provider.text_chat(
+                prompt="continue after reset", contexts=history, image_urls=refs
+            )
+            request = self.peer.prompts[-1]["prompt"]
+            self.assertEqual(len(request) - 1, count)
+            self.assertEqual(
+                request[0]["text"].count('"historical_images_not_attached":1'),
+                images.MAX_IMAGES + 2,
+            )
+            self.assertIn("Earlier caption", request[0]["text"])
+            self.assertNotIn("/missing", request[0]["text"])
+
+    async def test_limit_log_shows_current_count_bytes_and_pixels(self):
+        provider = self.provider()
+        path = str(self.first)
+        cases = (
+            ("count", "MAX_IMAGES", 1, [path, path]),
+            ("file_bytes", "MAX_IMAGE_BYTES", 1, [path]),
+            ("total_bytes", "MAX_IMAGE_TOTAL_BYTES", self.first.stat().st_size, [path, path]),
+            ("pixels", "MAX_IMAGE_PIXELS", 100, [path]),
+        )
+        for kind, constant, maximum, refs in cases:
+            with self.subTest(kind=kind):
+                with patch.object(images, constant, maximum), self.assertLogs("astrbot") as logs:
+                    with self.assertRaises(CursorError) as error:
+                        await provider.text_chat(prompt="limit", image_urls=refs)
+                self.assertEqual(error.exception.code, "image_limit")
+                row = next(
+                    json.loads(line.split("cursor_provider ", 1)[1])
+                    for line in logs.output
+                    if '"event":"request_finished"' in line
+                )
+                self.assertEqual(row["image_limit_kind"], kind)
+                self.assertEqual(row["image_limit_max"], maximum)
+                self.assertGreater(row["image_limit_actual"], maximum)
+        self.assertEqual(self.peer.prompts, [])
 
     async def test_image_only_local_file_and_mixed_multiple_images_use_inline_blocks(self):
         provider = self.provider()
