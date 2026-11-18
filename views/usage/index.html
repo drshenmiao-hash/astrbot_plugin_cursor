@@ -13,7 +13,7 @@
     <header class="page-head">
       <div>
         <h1>Cursor 用量管理</h1>
-        <p>插件本地统计 · UTC · 套餐额度以 Cursor 用量页为准</p>
+        <p>插件本地统计 · UTC</p>
       </div>
       <div class="controls">
         <label for="range">统计时段</label>
@@ -27,6 +27,16 @@
     </header>
     <p class="message" id="status" role="status">正在读取本地统计…</p>
     <p class="message warning" id="error" role="alert" hidden></p>
+    <section class="panel token-usage" aria-labelledby="token-title">
+      <div>
+        <h2 id="token-title">Token 用量 <span class="state">未上报</span></h2>
+        <p>当前 Cursor ACP 回复未携带 Token 用量。套餐用量可在 Cursor 官方用量页查看。</p>
+      </div>
+      <div class="official-usage">
+        <input id="official-usage-url" aria-label="Cursor 官方用量地址" type="url" value="https://cursor.com/dashboard/usage" readonly>
+        <button type="button" id="select-usage-url">选择地址</button>
+      </div>
+    </section>
     <div id="dashboard" hidden>
       <section class="runtime" aria-labelledby="runtime-title">
         <div class="runtime-heading">

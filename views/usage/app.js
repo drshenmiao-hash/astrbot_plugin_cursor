@@ -163,4 +163,9 @@ async function refresh() {
 byId("refresh").addEventListener("click", refresh);
 byId("range").addEventListener("change", refresh);
 byId("dimension").addEventListener("change", renderGroups);
+byId("select-usage-url").addEventListener("click", () => {
+  const url = byId("official-usage-url");
+  url.focus();
+  url.select();
+});
 refresh();
