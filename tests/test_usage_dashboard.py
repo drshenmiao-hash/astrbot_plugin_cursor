@@ -48,9 +48,14 @@ class DashboardQueries(unittest.TestCase):
         self.store.flush()
         with patch.object(self.store, "_write", side_effect=OSError("fake disk failure")):
             pending = self.store.record(event("dropped"))
+            dashboard = self.store.dashboard(7)
+            summary = self.store.summary()
             with self.assertRaises(OSError):
                 pending.result(timeout=2)
-        self.assertEqual(self.store.dashboard(7)["totals"]["requests"], 1)
+        self.assertEqual(dashboard["totals"]["requests"], 1)
+        self.assertEqual(dashboard["write_failures"], 1)
+        self.assertEqual(summary["rows"][0]["requests"], 1)
+        self.assertEqual(summary["write_failures"], 1)
 
     def test_group_output_is_bounded_and_excludes_sensitive_fields(self):
         for i in range(25):

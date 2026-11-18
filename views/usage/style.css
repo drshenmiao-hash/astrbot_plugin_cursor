@@ -50,11 +50,18 @@ button:disabled { opacity: .65; cursor: wait; }
 .runtime, .metric, .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 17px 19px; }
 .state { color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 3px 8px; font-size: 13px; }
 .token-usage { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
-.token-usage h2 .state { margin-inline-start: 4px; color: var(--warn); background: var(--warn-bg); font-weight: 500; }
 .token-usage p { margin-top: 6px; font-size: 13px; line-height: 1.55; }
 .official-usage { display: flex; gap: 8px; width: min(100%, 330px); }
 .official-usage input { flex: 1; min-width: 0; }
 .official-usage button { flex: none; }
+.csv-usage { flex-basis: 100%; min-width: 0; border-top: 1px solid var(--border); padding-top: 13px; }
+.csv-usage label { display: inline-block; margin: 0 8px 7px 0; font-size: 13px; font-weight: 650; }
+.csv-usage input { max-width: 100%; color: var(--muted); font: inherit; font-size: 13px; }
+.csv-usage .message { margin-bottom: 0; }
+#csv-status:empty { display: none; }
+.token-total { display: flex; align-items: baseline; flex-wrap: wrap; gap: 5px 12px; margin-top: 10px; }
+.token-total span { color: var(--muted); font-size: 13px; }
+.token-total strong { font-size: 24px; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
 .runtime dl { display: grid; grid-template-columns: 2fr repeat(4, 1fr) 1.4fr; gap: 13px; margin-top: 13px; }
 dt, dd { font-size: 13px; overflow-wrap: anywhere; }
 dd { margin-top: 3px; font-weight: 650; }

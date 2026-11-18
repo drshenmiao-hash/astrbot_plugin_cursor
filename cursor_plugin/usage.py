@@ -105,19 +105,21 @@ class UsageStore:
         with self._lock:
             if self._closed:
                 raise RuntimeError("Local statistics store is closed")
-            self._last = self._writer.submit(self._write, row)
-            self._last.add_done_callback(self._write_done)
+            self._last = self._writer.submit(self._write_record, row)
             return self._last
 
     def _write(self, row):
         with self._connect() as db:
             db.execute("INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
 
-    def _write_done(self, future):
-        if future.exception() is not None:
+    def _write_record(self, row):
+        try:
+            self._write(row)
+        except Exception:
             # Never log raw SQLite errors, event contents, credentials or paths.
             self.write_failures += 1
             logger.warning("cursor_local_usage code=write_failed")
+            raise
 
     def flush(self):
         with self._lock:
@@ -125,10 +127,16 @@ class UsageStore:
         if future is not None:
             future.result()
 
+    def _wait_for_writes(self):
+        with self._lock:
+            pending = self._last
+        if pending is not None:
+            wait([pending])
+
     def summary(self, group="total", key="", *, limit=20):
         if group not in _GROUPS:
             raise ValueError("Use total, session, day or model")
-        self.flush()
+        self._wait_for_writes()
         column = _GROUPS[group]
         where, params = (f" WHERE {column} = ?", [key]) if key else ("", [])
         sql = f"""SELECT {column} AS label, {_TOTALS}
@@ -158,10 +166,7 @@ class UsageStore:
         """Read a consistent, bounded UTC view even after an individual write fails."""
         if type(days) is not int or days not in DASHBOARD_RANGES:
             raise ValueError("Unsupported dashboard range")
-        with self._lock:
-            pending = self._last
-        if pending is not None:
-            wait([pending])
+        self._wait_for_writes()
 
         end = datetime.now(timezone.utc).date()
         start = end - timedelta(days=days - 1)

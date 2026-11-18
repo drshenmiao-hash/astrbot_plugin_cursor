@@ -6,6 +6,7 @@
   <title>Cursor 用量管理</title>
   <link rel="stylesheet" href="./style.css">
   <script src="/api/plugin/page/bridge-sdk.js"></script>
+  <script defer src="./cursor-csv.js"></script>
   <script defer src="./app.js"></script>
 </head>
 <body>
@@ -16,7 +17,7 @@
         <p>插件本地统计 · UTC</p>
       </div>
       <div class="controls">
-        <label for="range">统计时段</label>
+        <label for="range">本地统计时段</label>
         <select id="range">
           <option value="7">近 7 天</option>
           <option value="30" selected>近 30 天</option>
@@ -29,12 +30,25 @@
     <p class="message warning" id="error" role="alert" hidden></p>
     <section class="panel token-usage" aria-labelledby="token-title">
       <div>
-        <h2 id="token-title">Token 用量 <span class="state">未上报</span></h2>
-        <p>当前 Cursor ACP 回复未携带 Token 用量。套餐用量可在 Cursor 官方用量页查看。</p>
+        <h2 id="token-title">Cursor 账号 Token 用量</h2>
+        <p>在 Cursor 用量页导出 CSV，再选取文件。数据仅在当前浏览器页面处理。</p>
       </div>
       <div class="official-usage">
         <input id="official-usage-url" aria-label="Cursor 官方用量地址" type="url" value="https://cursor.com/dashboard/usage" readonly>
         <button type="button" id="select-usage-url">选择地址</button>
+      </div>
+      <div class="csv-usage">
+        <label for="cursor-csv">选取用量 CSV</label>
+        <input type="file" id="cursor-csv" accept=".csv,text/csv" aria-describedby="csv-note">
+        <p id="csv-note">汇总覆盖文件内的账号用量，也可能包含插件以外的请求。当前 Cursor ACP 未提供逐请求 Token 数。</p>
+        <p id="csv-status" role="status"></p>
+        <p id="csv-error" class="message warning" role="alert" hidden></p>
+        <div id="csv-result" hidden>
+          <div class="token-total"><span>总 Token</span><strong id="csv-total"></strong></div>
+          <div class="scroll">
+            <table aria-label="CSV 按模型统计"><thead><tr><th scope="col">模型</th><th scope="col">事件</th><th scope="col">有 Token 记录</th><th scope="col">总 Token</th></tr></thead><tbody id="csv-models"></tbody></table>
+          </div>
+        </div>
       </div>
     </section>
     <div id="dashboard" hidden>

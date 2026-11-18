@@ -27,6 +27,7 @@ const codes = {
 };
 const count = (value) => number.format(value ?? 0);
 let current;
+let csvSelection = 0;
 
 function write(id, value) {
   byId(id).textContent = value;
@@ -59,6 +60,48 @@ function table(id, rows, columns) {
   for (const values of rows) {
     const row = body.insertRow();
     for (const value of values) row.insertCell().textContent = value;
+  }
+}
+
+async function showCursorCsv(event) {
+  const input = event.currentTarget;
+  const file = input.files[0];
+  if (!file) return;
+  input.value = "";
+  const selection = ++csvSelection;
+  const error = byId("csv-error");
+  const result = byId("csv-result");
+  result.hidden = error.hidden = true;
+  write("csv-total", "");
+  byId("csv-models").replaceChildren();
+  write("csv-status", "正在读取 CSV…");
+  try {
+    if (file.size > 20 * 1024 ** 2) {
+      throw new Error("CSV 超过 20 MiB，请在 Cursor 用量页缩短导出时段。");
+    }
+    const source = await file.text().catch(() => {
+      throw new Error("无法读取 CSV 文件。");
+    });
+    if (selection !== csvSelection) return;
+    const report = parseCursorUsageCsv(source);
+    const missing = report.events - report.reported;
+    write("csv-status", report.events
+      ? `文件中有 ${count(report.events)} 条用量事件${missing ? `，其中 ${count(missing)} 条未提供 Token 数` : ""}。`
+      : "文件中没有用量事件。");
+    write("csv-total", report.reported ? count(report.total) : "—");
+    if (!report.events) return;
+    table("csv-models", report.models.map((model) => [
+      model.label || "模型未注明",
+      count(model.events),
+      count(model.reported),
+      model.reported ? count(model.total) : "—",
+    ]), 4);
+    result.hidden = false;
+  } catch (failure) {
+    if (selection !== csvSelection) return;
+    write("csv-status", "");
+    error.textContent = failure.message;
+    error.hidden = false;
   }
 }
 
@@ -163,6 +206,7 @@ async function refresh() {
 byId("refresh").addEventListener("click", refresh);
 byId("range").addEventListener("change", refresh);
 byId("dimension").addEventListener("change", renderGroups);
+byId("cursor-csv").addEventListener("change", showCursorCsv);
 byId("select-usage-url").addEventListener("click", () => {
   const url = byId("official-usage-url");
   url.focus();

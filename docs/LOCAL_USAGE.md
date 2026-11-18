@@ -6,7 +6,9 @@
 
 登录管理面板，打开 **Cursor CLI → 用量与运行状态**。运行状态显示当前模型、连接配置、CLI 进程、排队和执行中请求、缓存会话及最近失败。切换近 7、30 或 90 天可以查看按 UTC 日期汇总的趋势、成功率、耗时、字节和复用次数，明细可按模型、匿名会话或结果查看，最多显示 20 项。安装新版本后，页面沿用原有统计库。
 
-管理页的 **Token 用量** 显示「未上报」。当前配套 Cursor CLI 的 ACP 回复未包含 Token 计数，面板的收发流量按字节显示。套餐用量可在 Cursor 的官方页面查询。[Cursor 用量页](https://cursor.com/dashboard/usage)
+在 Cursor 用量页选择时段并点 **Export CSV**，再在管理页的 **Cursor 账号 Token 用量** 选取文件。管理页按 CSV 的 `Total Tokens` 和 `Model` 列汇总全部事件，显示总 Token、按模型统计和缺少 Token 计数的条数。CSV 只在当前浏览器页面读取，刷新页面后需要重新选取。单份文件上限 20 MiB。[Cursor 用量页](https://cursor.com/dashboard/usage)
+
+账号 CSV 可能包含插件以外的请求。当前配套 Cursor CLI 的 ACP 回复未提供逐请求 Token 数，因此 AstrBot 原生模型用量榜无法显示 Cursor 的实际数值。插件本地的收发流量仍按字节查看，套餐余额和收费以 Cursor 用量页为准。
 
 CLI、登录或模型在启动时校验失败，页面会显示失败码和处理提示，并继续读取历史统计。遇到运行器占用、临时连接失败或超时时，启动校验最多做三次，间隔 0.5 秒和 2 秒。仍失败时，已有模型的后续聊天或模型列表查询可触发重新校验。并发请求共用一次校验，失败后冷却 15 秒，空闲时不探测。登录失效、模型不存在等错误须处理后重载。首次设置或切换到尚未注册的新模型，也需在校验通过后重载才能自动新增模型。
 
@@ -49,6 +51,7 @@ CLI、登录或模型在启动时校验失败，页面会显示失败码和处�
 
 ```bash
 python -m unittest tests.test_usage tests.test_models tests.test_registration tests.test_history_reuse
+node --test tests/test_cursor_csv.cjs
 ```
 
 69 项通过，其中 14 项本地统计回归，完整实际输出见 [LOCAL_USAGE_TEST_OUTPUT.txt](LOCAL_USAGE_TEST_OUTPUT.txt)。覆盖成功/失败、全部元数据、按模型/UTC 日/会话汇总、重启持久化、匿名标识稳定、请求去重、只写专用目录、不存正文/凭据、默认配置不变、缓存不额外调用模型、写入失败不影响回复，以及失败 ACP 请求保留实际 modelId。
