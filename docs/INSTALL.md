@@ -1,9 +1,9 @@
 # 安装与升级
 
-基础版本位于默认分支 `main`，本次自动注册和历史复用补丁仅在 `fix/persistent-cli-provider`。接口参考 AstrBot 4.29.4；运行时与真实计费尚待验收。先使用独立测试编排、独立 AstrBot 数据卷和平台连接，不在运行中的线上容器安装软件。
+使用 v0.4.1 的源码 ZIP，或检出下方的发布标签。接口参考 AstrBot 4.29.4。真实计费请在安装环境单独验收。先用独立测试编排、独立 AstrBot 数据卷和平台连接验证。[v0.4.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.1)
 
 ```bash
-git clone --branch fix/persistent-cli-provider https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
+git clone --branch v0.4.1 https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
 cd /opt/astrbot-cursor
 ```
 
