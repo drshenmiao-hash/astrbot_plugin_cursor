@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import logging
 import time
 
 from .errors import CursorError, CursorStreamError, ImageLimitError
@@ -14,8 +13,6 @@ from .logic import (
     classify_reply_error,
 )
 from .models import ModelResolutionError, catalog_ids, resolve_model
-
-logger = logging.getLogger("astrbot")
 
 
 class ACPClient:
@@ -101,7 +98,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.1"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.2"},
                 },
                 timeout=30,
             )
@@ -135,7 +132,14 @@ class ACPClient:
         try:
             model = resolve_model(model, result["models"]["availableModels"])
         except ModelResolutionError as exc:
-            logger.warning("%s", exc)
+            # The standalone ACP checks run without AstrBot installed.
+            try:
+                from astrbot.api import logger
+            except ModuleNotFoundError as missing:
+                if missing.name != "astrbot":
+                    raise
+            else:
+                logger.warning("%s", exc)
             raise
         if not any(
             m.get("id") == "ask"

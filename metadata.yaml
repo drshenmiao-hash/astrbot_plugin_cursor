@@ -2,7 +2,7 @@ name: astrbot_plugin_cursor
 display_name: Cursor CLI
 short_desc: AstrBot 原生 Cursor CLI Provider，支持文本、图片输入和本地用量管理。
 desc: 通过官方 Cursor CLI 的 ACP 接入指定模型，固定 Ask 模式。支持会话复用、按轮转发图片、WebUI 本地用量统计，以及本地隔离或专用 SSH 运行器。
-version: 0.4.1
+version: 0.4.2
 author: drshenmiao-hash
 repo: https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 astrbot_version: ">=4.29.4,<5"

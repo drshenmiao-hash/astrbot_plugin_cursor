@@ -1,7 +1,5 @@
 """Typed, fixed errors for routing and diagnostics; upstream payloads stay private."""
 
-import logging
-
 MESSAGES = {
     "registration_save_failed": "Cursor 来源或模型配置未能保存，请检查 AstrBot 配置写入权限并重载插件。",
     "usage_unavailable": "Cursor 本地统计不可用，请检查插件数据目录权限。",
@@ -121,7 +119,10 @@ async def retry_stream_errors(operation, *, request_max_retries=None):
         try:
             return await operation()
         except CursorStreamError as exc:
-            logging.getLogger("astrbot").warning(
+            # The isolated runner imports the error types without the AstrBot API.
+            from astrbot.api import logger
+
+            logger.warning(
                 "cursor_stream_failure code=%s attempt=%d max_attempts=%d retryable=true",
                 exc.code,
                 attempt + 1,

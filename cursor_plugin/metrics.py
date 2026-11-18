@@ -1,9 +1,7 @@
 """Metadata-only records. No request/response content, credentials, paths or raw errors."""
 
 import json
-import logging
 
-logger = logging.getLogger("astrbot")
 _usage_store = None
 _FIELDS = {
     "request_id",
@@ -52,6 +50,13 @@ def set_usage_store(store):
 
 
 def record(event, **values):
+    # Standalone diagnostics report results through the CLI without AstrBot.
+    try:
+        from astrbot.api import logger
+    except ModuleNotFoundError as exc:
+        if exc.name != "astrbot":
+            raise
+        return
     data = {"event": event}
     data.update({key: value for key, value in values.items() if key in _FIELDS})
     if event == "request_finished" and _usage_store is not None:

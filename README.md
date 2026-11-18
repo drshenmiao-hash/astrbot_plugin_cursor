@@ -2,9 +2,9 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> v0.4.1 只发送当前轮图片，并修复 AstrBot 附加内容被重复计入历史导致的会话重建。请下载源码 ZIP，在 AstrBot 插件页上传。[v0.4.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.1)
+> v0.4.2 统一使用 AstrBot 官方插件日志，并延续当前轮图片发送和会话复用修复。请下载源码 ZIP，在 AstrBot 插件页上传。[v0.4.2 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.2)
 
-也可以在 AstrBot 插件页用仓库 URL 安装或更新。默认分支 `main` 提供 `0.4.1`。
+也可以在 AstrBot 插件页用仓库 URL 安装或更新。默认分支 `main` 提供 `0.4.2`。
 
 ```text
 https://github.com/drshenmiao-hash/astrbot_plugin_cursor

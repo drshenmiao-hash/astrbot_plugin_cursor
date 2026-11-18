@@ -3,9 +3,10 @@
 """Plugin configuration and native Provider lifecycle integration."""
 
 import asyncio
-import logging
 import time
 from copy import deepcopy
+
+from astrbot.api import logger
 
 from .engine import Engine
 from .errors import MESSAGES, CursorError
@@ -15,7 +16,6 @@ from .usage import UsageStore, format_summary
 
 PROVIDER_TYPE = "cursor_cli"
 DEFAULT_SOURCE_ID = PROVIDER_TYPE
-logger = logging.getLogger("astrbot")
 _settings = None
 _engine = None
 _available_models = None

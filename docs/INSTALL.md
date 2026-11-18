@@ -1,9 +1,9 @@
 # 安装与升级
 
-使用 v0.4.1 的源码 ZIP，或检出下方的发布标签。接口参考 AstrBot 4.29.4。真实计费请在安装环境单独验收。先用独立测试编排、独立 AstrBot 数据卷和平台连接验证。[v0.4.1 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.1)
+使用 v0.4.2 的源码 ZIP，或检出下方的发布标签。接口参考 AstrBot 4.29.4。真实计费请在安装环境单独验收。先用独立测试编排、独立 AstrBot 数据卷和平台连接验证。[v0.4.2 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.4.2)
 
 ```bash
-git clone --branch v0.4.1 https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
+git clone --branch v0.4.2 https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
 cd /opt/astrbot-cursor
 ```
 
