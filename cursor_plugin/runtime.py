@@ -9,6 +9,7 @@ from copy import deepcopy
 
 from .engine import Engine
 from .errors import MESSAGES, CursorError
+from .images import model_modalities
 from .models import ModelResolutionError, catalog_ids, resolve_model
 from .settings import settings_from
 from .usage import UsageStore, format_summary
@@ -399,7 +400,7 @@ async def ensure_default_source_and_model(config):
 
     for item in models:
         if owned(item):
-            item.update(key="", api_base="", modalities=["text"])
+            item.update(key="", api_base="", modalities=model_modalities(item.get("model")))
     model_id = settings()["model"]
     target = None
     if not model_id:
@@ -444,7 +445,7 @@ async def ensure_default_source_and_model(config):
                 provider_type="chat_completion",
                 key="",
                 api_base="",
-                modalities=["text"],
+                modalities=model_modalities(model_id),
             )
             target.setdefault("enable", True)
     await _commit_configuration(config, {"provider_sources": sources, "provider": models})

@@ -62,6 +62,8 @@
 
 当前适配器声明文本能力。直接传入图片、音频或工具时抛出 `UnsupportedFeatureError`，有稳定的 `code` 和 `feature`，上层可以据此降级。此版本尚未将 AstrBot 工具注册到 Cursor，不能输出伪造的 `tool_calls`。
 
+图片传输的协议证据和隔离测试方法见 [Cursor ACP 图片输入验收](docs/IMAGE_INPUT.md)。
+
 `input_bytes` 是完整规范化历史，`sent_input_bytes` 是本次发送的文本，`wire_bytes` 是 ACP JSON 帧大小，不含 SSH/TLS 开销。它们都不是 token 或账单金额。会话复用减少重复传输和重复入库，但不能保证历史 token 不再计费或额度下降一半。
 
 缓存回复会记录 `reset_reason=cached_reply`，发送字节为 0。system 增量是提示词层面的更新，不能从 Cursor 既有上下文中物理删除旧指令。contexts 含 `tool_calls` 仍返回不支持错误；历史窗口裁剪仍会打断对话前缀。

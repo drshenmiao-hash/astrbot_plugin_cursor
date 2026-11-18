@@ -191,8 +191,26 @@ def queue_execution_order(requests, *, active_sessions=()):
     return ordered
 
 
+def classify_image_error(raw, *, reply=False):
+    text = raw.strip().casefold()
+    prefixed = text.startswith(("error:", "image error:"))
+    text = text.removeprefix("error:").strip().removeprefix("image error:").strip()
+    text = text.removeprefix("[invalid_argument]").strip()
+    if text.startswith("the model provider could not read an image"):
+        return True
+    if text.rstrip(".!") == "invalid image":
+        return True
+    if reply and not prefixed:
+        return False
+    return text.startswith(
+        ("invalid image:", "image input is not supported", "image attachments are not supported")
+    )
+
+
 def classify_error(raw, *, stage="request"):
     text = raw.casefold()
+    if classify_image_error(raw):
+        return "image_unavailable"
     if "host key verification failed" in text or "remote host identification has changed" in text:
         return "ssh_host_key_mismatch"
     if "bwrap" in text and any(

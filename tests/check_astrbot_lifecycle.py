@@ -24,7 +24,9 @@ PREFIX = f"data.plugins.{PLUGIN}.cursor_plugin"
 ROOT = Path(__file__).resolve().parents[1]
 
 
-async def run_chat(provider, prompt, *, max_attempts=1, cid=None, history=None, system=None):
+async def run_chat(
+    provider, prompt, *, max_attempts=1, cid=None, history=None, system=None, image_urls=None
+):
     from astrbot.core.agent.hooks import BaseAgentRunHooks
     from astrbot.core.agent.run_context import ContextWrapper
     from astrbot.core.agent.runners.tool_loop_agent_runner import ToolLoopAgentRunner
@@ -46,6 +48,7 @@ async def run_chat(provider, prompt, *, max_attempts=1, cid=None, history=None, 
             conversation=Conversation("mock-platform", "mock-user", cid) if cid else None,
             contexts=history or [],
             system_prompt=system,
+            image_urls=image_urls or [],
         ),
         run_context=ContextWrapper(context=None),
         tool_executor=MagicMock(),
@@ -272,6 +275,28 @@ async def verify(root):
             "PASS concurrent chats share one real simulated ACP catalog revalidation and recover without a reload"
         )
         await verify_sessions(pending_provider)
+        from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+        from PIL import Image
+
+        image_path = Path(get_astrbot_temp_path()) / "host-fixture.png"
+        image_path.parent.mkdir(parents=True, exist_ok=True)
+        with Image.new("RGB", (32, 32), "red") as fixture:
+            fixture.save(image_path)
+        images = importlib.import_module(PREFIX + ".images")
+        with (
+            patch.object(images, "VERIFIED_IMAGE_MODELS", frozenset({MODEL})),
+            patch.dict(pending_provider.provider_config, {"modalities": ["text", "image"]}),
+        ):
+            assert await run_chat(
+                pending_provider, "MOCK_IMAGE_REQUIRED", image_urls=[str(image_path)]
+            ) == (
+                ["INLINE-IMAGE"],
+                0,
+            )
+        assert pending_provider.provider_config["modalities"] == ["text"]
+        print(
+            "PASS native AstrBot ProviderRequest carried a prepared image inline to the ACP subprocess in test mode"
+        )
     finally:
         await host.stop()
 

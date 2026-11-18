@@ -14,6 +14,7 @@ from astrbot.core.provider.register import provider_cls_map, register_provider_a
 
 from . import runtime
 from .errors import CursorError, UnsupportedFeatureError, retry_stream_errors
+from .images import ImageInput, model_modalities
 from .metrics import record
 from .transcript import normalize_messages
 
@@ -48,10 +49,11 @@ class CursorCLIProvider(Provider):
     def __init__(self, provider_config, provider_settings):
         # Dashboard-created models can default to image/audio/tool support.
         # Declare this adapter's actual capabilities on its own config copy.
-        config = {**provider_config, "modalities": ["text"]}
-        super().__init__(config, provider_settings)
         cfg = runtime.settings()
-        self.set_model(provider_config.get("model") or cfg["model"])
+        model = provider_config.get("model") or cfg["model"]
+        config = {**provider_config, "modalities": model_modalities(model)}
+        super().__init__(config, provider_settings)
+        self.set_model(model)
         self.engine = runtime.acquire_engine() if cfg["model"] else None
         self.settings = cfg
         self._pending = set()
@@ -187,19 +189,22 @@ class CursorCLIProvider(Provider):
                 if callable(getattr(func_tool, "empty", None))
                 else bool(func_tool)
             )
-            if image_urls:
-                raise UnsupportedFeatureError("image")
             if audio_urls:
                 raise UnsupportedFeatureError("audio")
             if has_tools or tool_calls_result or tool_choice == "required":
                 raise UnsupportedFeatureError("tool_calls")
-            messages = normalize_messages(
-                prompt,
-                contexts,
-                system_prompt,
-                extra_user_content_parts,
-                max_bytes=self.settings["context_max_bytes"],
-            )
+            image_input = None
+            arguments = (prompt, contexts, system_prompt, extra_user_content_parts)
+            options = {"max_bytes": self.settings["context_max_bytes"], "image_urls": image_urls}
+            if "image" in model_modalities(self.get_model()):
+                from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
+
+                image_input = ImageInput(get_astrbot_temp_path())
+                messages = await asyncio.to_thread(
+                    normalize_messages, *arguments, **options, image_input=image_input
+                )
+            else:
+                messages = normalize_messages(*arguments, **options)
             await runtime.ensure_model_validated()
             if self._closed:
                 raise CursorError("closed")
@@ -234,6 +239,9 @@ class CursorCLIProvider(Provider):
                     on_queued=on_queued,
                     sequence=request_sequence,
                     stats_session=stats_session,
+                    **(
+                        {"images": image_input.blocks} if image_input and image_input.blocks else {}
+                    ),
                 )
             )
             self._pending.add(task)

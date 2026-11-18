@@ -2,6 +2,7 @@
 """Offline ACP peer for the operator-run environment script; no network or login."""
 
 import asyncio
+import base64
 import json
 import sys
 
@@ -33,6 +34,15 @@ async def main():
             chunks = ["OK"]
             if "MOCK_STREAM_FAILURE" in text:
                 chunks = ["部分正常回复。", "Error: RetriableError: [unavailable] PING timed out"]
+            if "MOCK_IMAGE_REQUIRED" in text:
+                images = params["prompt"][1:]
+                png = (
+                    len(images) == 1
+                    and images[0].get("type") == "image"
+                    and images[0].get("mimeType") == "image/png"
+                    and base64.b64decode(images[0]["data"], validate=True).startswith(b"\x89PNG")
+                )
+                chunks = ["INLINE-IMAGE" if png else "IMAGE-MISSING"]
             for chunk in chunks:
                 send(
                     {
@@ -62,7 +72,7 @@ async def main():
                 request,
                 {
                     "protocolVersion": 1,
-                    "agentCapabilities": {},
+                    "agentCapabilities": {"promptCapabilities": {"image": True}},
                     "authMethods": [{"id": "cursor_login", "name": "Mock"}],
                 },
             )

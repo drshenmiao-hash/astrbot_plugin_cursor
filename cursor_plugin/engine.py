@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from .acp import ACPClient
 from .errors import CursorError
+from .images import prompt_images
 from .launcher import ProcessOwner, ssh_error_code
 from .logic import history_state, reconcile_history
 from .metrics import record
@@ -37,6 +38,7 @@ class Job:
     sequence: int | None = None
     stats_session: str | None = None
     model_id: str | None = None
+    images: dict | None = None
 
 
 class Engine:
@@ -68,7 +70,9 @@ class Engine:
                     for i in range(self.cfg["max_concurrency"])
                 ]
 
-    async def submit(self, messages, scope, *, on_queued=None, sequence=None, stats_session=None):
+    async def submit(
+        self, messages, scope, *, on_queued=None, sequence=None, stats_session=None, images=None
+    ):
         await self._start_workers()
         now = time.monotonic()
         size = len(encode(messages))
@@ -85,6 +89,7 @@ class Engine:
         )
         job.sequence = sequence if type(sequence) is int else None
         job.stats_session = stats_session
+        job.images = images
         self._jobs[job.request_id] = job
 
         async def queue_notice():
@@ -264,7 +269,7 @@ class Engine:
 
     async def _cancel_turn(self, client, session_id, turn):
         try:
-            await client.notify("session/cancel", {"sessionId": session_id})
+            await asyncio.wait_for(client.notify("session/cancel", {"sessionId": session_id}), 5)
             try:
                 await asyncio.wait_for(asyncio.shield(turn), 5)
             except CursorError as exc:
@@ -305,10 +310,20 @@ class Engine:
         if not job.scope:
             job.reset_reason = "no_stable_session_key"
         session_id = cached["session_id"] if cached else await client.new_session(self.cfg["model"])
-        text = render_messages(delta, incremental=bool(cached), clock_fields=plan["clock_fields"])
+        delta, image_blocks = prompt_images(delta, job.images or {})
+        text = render_messages(
+            delta,
+            incremental=bool(cached),
+            clock_fields=plan["clock_fields"],
+            image_count=len(image_blocks),
+        )
         job.sent_bytes = len(text.encode())
         stats = {}
-        turn = asyncio.create_task(client.prompt(session_id, text, stats=stats))
+        turn = asyncio.create_task(
+            client.prompt(
+                session_id, text, stats=stats, **({"images": image_blocks} if image_blocks else {})
+            )
+        )
         try:
             completed = await asyncio.shield(turn)
             reply = completed["text"]
