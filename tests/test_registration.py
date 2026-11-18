@@ -223,12 +223,14 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertIs(self.manager.inst_map[key], instance)
         self.assertEqual(self.manager.reloads, [MODEL, MODEL])
 
-    async def test_capabilities_are_text_only_in_saved_and_live_config(self):
+    async def test_selected_model_accepts_image_input_without_other_capabilities(self):
         await runtime.initialize(self.context)
         source = self.cursor_sources()[0]
         model = self.cursor_models()[0]
+        self.assertEqual(source["modalities"], ["text"])
+        self.assertEqual(model["modalities"], ["text", "image"])
+        self.assertEqual(self.manager.inst_map[MODEL].config["modalities"], ["text", "image"])
         for config in [source, model, self.manager.inst_map[MODEL].config]:
-            self.assertEqual(config["modalities"], ["text"])
             self.assertEqual(config["key"], "")
             self.assertEqual(config["api_base"], "")
 
@@ -259,7 +261,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.cursor_models()), 1)
         self.assertEqual(self.cursor_models()[0]["model"], MODEL)
         self.assertEqual(self.cursor_models()[0]["temperature"], 0.4)
-        self.assertEqual(self.cursor_models()[0]["modalities"], ["text"])
+        self.assertEqual(self.cursor_models()[0]["modalities"], ["text", "image"])
 
     async def test_same_model_alias_is_not_duplicated_or_renamed(self):
         self.conf["provider_sources"].append({"id": "custom-cursor", "type": "cursor_cli"})

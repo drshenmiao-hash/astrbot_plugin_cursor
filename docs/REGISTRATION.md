@@ -1,11 +1,9 @@
 # 自动注册来源与原生模型
 
-代码位于 `fix/persistent-cli-provider`；此补丁不合入 main，不操作生产环境。
-
 安装或重载时：
 
 1. 在 `provider_sources` 中查找 `type=cursor_cli` 的来源，优先使用 ID 为 `cursor_cli` 的条目，否则复用已有 Cursor 来源。没有则创建。
-2. 来源 Key、API Base 留空。模型只声明 `modalities=["text"]`。
+2. 来源 Key、API Base 留空。当前配置的原生模型声明 `modalities=["text", "image"]`，让 AstrBot 把图片交给此适配器。模型是否接受图片，以当前请求的 Cursor 返回为准。
 3. 插件配置 `model_id` 明确有效时，先从 ACP 查询一次模型列表并按 [解析规则](MODEL_IDS.md) 得到 modelId，再查找同 ID 或同 Cursor 模型的条目。有则更新/复用，没有才新增。新建条目的 `id` 和 `model` 均使用解析后的 ACP modelId，不写入管理端 ID 或展示名，不自动替换成别的模型。
 4. 使用 AstrBot 配置的 `save_config_async()` 保存变更，同步 ProviderManager 的来源、模型列表。没有变更不重复保存。保存快照被更新版本取代时重试一次；保存失败则回滚自己这次仍未被并发修改的字段，给出固定错误。
 5. 冷启动时由 AstrBot 随后加载模型；运行中的插件安装或重载会加载自己的目标模型或刷新已有 Cursor 实例，最后恢复之前的当前模型选择，包括原先未选择模型的状态。

@@ -20,6 +20,7 @@ MESSAGES = {
     "image_source": "图片来源不可读，须使用 AstrBot 临时目录内的普通文件或内嵌图片。",
     "image_invalid": "图片格式或内容无效，请发送尺寸合适的静态 PNG、JPEG 或 WebP。",
     "image_limit": "图片数量、文件大小或像素数超过限制，本次请求未发送。",
+    "image_unsupported": "当前 Cursor 运行端或所选模型不支持图片输入。",
     "image_unavailable": "当前 Cursor CLI 或指定模型拒绝了图片，本次没有按纯文本重发。",
     "context_limit": "完整上下文超过 context_max_bytes，已报错；不会截断或悄悄丢弃历史。",
     "timeout": "Cursor 请求超时，已发出取消；请检查诊断记录和用量后再决定是否重试。",
@@ -81,6 +82,12 @@ class UnsupportedFeatureError(CursorError):
             self,
             f"[cursor:{self.code}] 当前 Cursor ACP 适配器不支持 {self.feature}，请使用支持该能力的模型。",
         )
+
+
+class ImageUnsupportedError(CursorError):
+    def __init__(self, message):
+        self.code = "image_unsupported"
+        RuntimeError.__init__(self, f"[cursor:{self.code}] {message}")
 
 
 class CursorStreamError(CursorError):

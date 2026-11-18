@@ -17,14 +17,6 @@ MAX_IMAGE_TOTAL_BYTES = 4 * 1024 * 1024
 MAX_IMAGE_PIXELS = 4_000_000
 MAX_IMAGE_FRAME_BYTES = 4 * ((MAX_IMAGE_TOTAL_BYTES + 2) // 3) + 4096
 IMAGE_TYPES = {"PNG": "image/png", "JPEG": "image/jpeg", "WEBP": "image/webp"}
-# Add a canonical ACP modelId only after a live image acceptance run succeeds.
-VERIFIED_IMAGE_MODELS = frozenset()
-
-
-def model_modalities(model):
-    return (
-        ["text", "image"] if isinstance(model, str) and model in VERIFIED_IMAGE_MODELS else ["text"]
-    )
 
 
 def read_local_image(root, ref):

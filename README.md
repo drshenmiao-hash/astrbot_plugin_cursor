@@ -2,11 +2,9 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> v0.3.2 预发布版修复了 Cursor Provider 的重载、禁用、重试和断流处理。请下载源码 ZIP，在 AstrBot 插件页上传。真实 Cursor 联通与套餐计费需在安装环境中单独确认。[v0.3.2 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/v0.3.2)
+> ver0.4.0 支持把图片发给当前选定的 Cursor 模型。模型明确拒绝图片时返回 `image_unsupported`，可在插件设置自定义提示。请下载安装 ZIP，在 AstrBot 插件页上传。[ver0.4.0 发布页](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases/tag/ver0.4.0)
 
-此预发布版来自 `fix/persistent-cli-provider`。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
-
-同一分支还包含自动注册补丁：保存明确的 `model_id` 后重载插件，即会新增来源和原生模型，不需要在面板手工添加。原有默认模型和备用模型保持不变。
+保存明确的 `model_id` 后重载插件，即会新增或更新 Cursor 来源和原生模型。原有默认模型和备用模型保持不变。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 
 登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。需要查看账号 Token 时，可在同一页选取 Cursor 官方导出的用量 CSV，文件只在浏览器内读取。[用量说明](docs/LOCAL_USAGE.md)
 
@@ -25,6 +23,7 @@
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `model_id` | 空 | 明确的 ACP modelId、唯一展示名或支持的管理端 ID；以 ACP 列表为准，新建原生 `id` 和 `model` 均使用解析后的 modelId；空/auto/default 不建模型 |
+| `image_unsupported_message` | 当前 Cursor 运行端或所选模型不支持图片输入。 | 图片输入不受支持时的聊天提示，留空使用默认提示 |
 | `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
 | `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
 | `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
@@ -60,7 +59,7 @@
 
 ## 能力与费用
 
-当前适配器声明文本能力。直接传入图片、音频或工具时抛出 `UnsupportedFeatureError`，有稳定的 `code` 和 `feature`，上层可以据此降级。此版本尚未将 AstrBot 工具注册到 Cursor，不能输出伪造的 `tool_calls`。
+当前适配器接收文本和图片。图片随正常请求发给所选模型，模型或运行端明确报不支持时返回 `image_unsupported`。音频和工具请求仍返回 `UnsupportedFeatureError`。
 
 图片传输的协议证据和隔离测试方法见 [Cursor ACP 图片输入验收](docs/IMAGE_INPUT.md)。
 

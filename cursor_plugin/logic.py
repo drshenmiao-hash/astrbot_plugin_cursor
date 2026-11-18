@@ -14,6 +14,15 @@ _MACHINE_CHUNK_TAIL = re.compile(
     r"[.!]?[ \t]*$",
     re.IGNORECASE,
 )
+_IMAGE_UNSUPPORTED = re.compile(
+    r"\b(?:does not|doesn['’]t|cannot) (?:support|accept) "
+    r"(?:images?|image inputs?|image attachments?|vision|multimodal inputs?)\b"
+    r"|\b(?:images?|image inputs?|image attachments?|vision)(?: (?:is|are))? not supported\b"
+    r"|\bunsupported (?:input|content)(?: block)? type\s*[:=]\s*[\"']?image\b"
+    r"|\bunsupported image (?:inputs?|attachments?)\b"
+    r"|\bonly supports? text(?: input| content)?\b"
+    r"|\bonly (?:text input|text content) (?:is|are) supported\b"
+)
 
 
 def history_hashes(history):
@@ -196,21 +205,26 @@ def classify_image_error(raw, *, reply=False):
     prefixed = text.startswith(("error:", "image error:"))
     text = text.removeprefix("error:").strip().removeprefix("image error:").strip()
     text = text.removeprefix("[invalid_argument]").strip()
-    if text.startswith("the model provider could not read an image"):
-        return True
-    if text.rstrip(".!") == "invalid image":
-        return True
-    if reply and not prefixed:
-        return False
-    return text.startswith(
-        ("invalid image:", "image input is not supported", "image attachments are not supported")
-    )
+    if (
+        text.startswith("the model provider could not read an image")
+        or text.rstrip(".!") == "invalid image"
+    ):
+        return "image_unavailable"
+    if not reply or prefixed:
+        if _IMAGE_UNSUPPORTED.search(text):
+            return "image_unsupported"
+        if text.startswith("invalid image:"):
+            return "image_unavailable"
+    concise = re.sub(r"^(?:(?:this|the|current|selected) )?model ", "", text.rstrip(".!"))
+    if _IMAGE_UNSUPPORTED.fullmatch(concise):
+        return "image_unsupported"
+    return None
 
 
 def classify_error(raw, *, stage="request"):
     text = raw.casefold()
-    if classify_image_error(raw):
-        return "image_unavailable"
+    if image_error := classify_image_error(raw):
+        return image_error
     if "host key verification failed" in text or "remote host identification has changed" in text:
         return "ssh_host_key_mismatch"
     if "bwrap" in text and any(

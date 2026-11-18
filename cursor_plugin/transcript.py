@@ -86,10 +86,8 @@ def normalize_messages(
         messages.append(entry)
     if prompt is not None and not isinstance(prompt, str):
         raise UnsupportedFeatureError("content")
-    if (
-        image_input is not None
-        and isinstance(extra_parts, list)
-        and any(as_dict(part).get("text") == "[Image unavailable]" for part in extra_parts)
+    if isinstance(extra_parts, list) and any(
+        as_dict(part).get("text") == "[Image unavailable]" for part in extra_parts
     ):
         raise CursorError("image_source")
     extra, images = user_content(extra_parts, image_urls or ())

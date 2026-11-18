@@ -3,7 +3,7 @@
 import re
 from pathlib import Path
 
-from .errors import CursorError
+from .errors import MESSAGES, CursorError
 
 
 def settings_from(config):
@@ -25,6 +25,10 @@ def settings_from(config):
         if len(options["model"]) > 256 or any(ord(c) < 32 for c in options["model"]):
             raise ValueError
         options["requested_model"] = options["model"]
+        notice = config.get("image_unsupported_message", "")
+        if not isinstance(notice, str) or len(notice) > 240 or "\x00" in notice:
+            raise ValueError
+        options["image_unsupported_message"] = notice.strip() or MESSAGES["image_unsupported"]
         for name, default, low, high in (
             ("ssh_port", 2222, 1, 65535),
             ("timeout_seconds", 120, 1, 1800),

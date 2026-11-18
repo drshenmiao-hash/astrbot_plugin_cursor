@@ -15,7 +15,9 @@ from cursor_plugin import images, runtime
 from cursor_plugin.acp import ACPClient
 from cursor_plugin.errors import CursorError
 from cursor_plugin.provider import CursorCLIProvider
-from tests.check_cursor_images import MODEL, make_card
+from tests.check_cursor_images import make_card
+
+MODEL = "mock-vision-model"
 
 
 class ImagePeer:
@@ -44,7 +46,7 @@ class ImagePeer:
             self.sessions += 1
             result = {
                 "sessionId": f"session-{self.sessions}",
-                "models": {"availableModels": [{"modelId": MODEL, "name": "Grok 4.6"}]},
+                "models": {"availableModels": [{"modelId": MODEL, "name": "Mock Vision Model"}]},
                 "modes": {"availableModes": [{"id": "ask"}]},
             }
         elif method == "session/set_config_option":
@@ -55,19 +57,25 @@ class ImagePeer:
             if self.mode == "timeout":
                 self.pending[session] = request["id"]
                 return
-            if self.mode == "rpc_error":
+            if self.mode in {"rpc_error", "rpc_unsupported"}:
+                message = (
+                    "Selected model does not support image inputs: PRIVATE_PAYLOAD"
+                    if self.mode == "rpc_unsupported"
+                    else "Invalid image: PRIVATE_PAYLOAD"
+                )
                 self.send(
                     {
                         "id": request["id"],
-                        "error": {"code": -32603, "message": "Invalid image: PRIVATE_PAYLOAD"},
+                        "error": {"code": -32603, "message": message},
                     }
                 )
                 return
-            text = (
-                "Error: [invalid_argument] Invalid image: PRIVATE_PAYLOAD"
-                if self.mode == "chunk_error"
-                else "OK"
-            )
+            text = {
+                "chunk_error": "Error: [invalid_argument] Invalid image: PRIVATE_PAYLOAD",
+                "chunk_unsupported": "Error: [invalid_argument] Image inputs are not supported",
+                "text_only": "This model only supports text.",
+                "quoted": "Your previous model does not support images, but this shows a cat.",
+            }.get(self.mode, "OK")
             self.send(
                 {
                     "method": "session/update",
@@ -113,13 +121,11 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
         self.enterContext(patch.object(runtime, "_available_models", None))
         self.enterContext(patch.object(runtime, "_startup_failure", None))
         self.enterContext(patch.object(runtime, "_validation_stopped", False))
-        runtime.configure({"model_id": MODEL})
+        runtime.configure({"model_id": MODEL, "image_unsupported_message": "这个模型看不了图喵。"})
         runtime._settings["model"] = MODEL
-        runtime._available_models = [{"modelId": MODEL, "name": "Grok 4.6"}]
+        runtime._available_models = [{"modelId": MODEL, "name": "Mock Vision Model"}]
 
-    def provider(self, *, verified=True):
-        if verified:
-            self.enterContext(patch.object(images, "VERIFIED_IMAGE_MODELS", frozenset({MODEL})))
+    def provider(self):
         provider = CursorCLIProvider({"id": MODEL, "model": MODEL}, {})
         self.addAsyncCleanup(provider.terminate)
         provider.engine.client = self.client
@@ -186,13 +192,10 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
         await send(self.second)
         self.assertNotEqual(first["sessionId"], self.peer.prompts[-1]["sessionId"])
 
-    async def test_unverified_model_stays_text_and_rejects_image(self):
-        provider = self.provider(verified=False)
-        self.assertEqual(provider.provider_config["modalities"], ["text"])
-        with self.assertRaises(CursorError) as error:
-            await provider.text_chat(prompt="do not drop image", image_urls=[str(self.first)])
-        self.assertEqual(error.exception.code, "unsupported_image")
-        self.assertFalse(self.peer.prompts)
+    async def test_plain_text_without_image_capability_continues(self):
+        provider = self.provider()
+        self.assertEqual(provider.provider_config["modalities"], ["text", "image"])
+        self.client.initialized["agentCapabilities"]["promptCapabilities"]["image"] = False
         self.assertEqual((await provider.text_chat(prompt="plain text")).completion_text, "OK")
         self.assertEqual(len(self.peer.prompts[-1]["prompt"]), 1)
 
@@ -235,7 +238,7 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
         self.client.initialized["agentCapabilities"]["promptCapabilities"]["image"] = False
         with self.assertRaises(CursorError) as error:
             await provider.text_chat(prompt="read", image_urls=[str(self.first)])
-        self.assertEqual(error.exception.code, "image_unavailable")
+        self.assertEqual(error.exception.code, "image_unsupported")
         self.assertFalse(self.peer.prompts)
         self.client.initialized["agentCapabilities"]["promptCapabilities"]["image"] = True
         for mode in ("rpc_error", "chunk_error"):
@@ -245,6 +248,39 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(error.exception.code, "image_unavailable")
             self.assertNotIn("PRIVATE_PAYLOAD", str(error.exception))
         self.assertEqual(len(self.peer.prompts), 2)
+
+    async def test_model_unsupported_sends_the_custom_error_once_and_keeps_failure_code(self):
+        from astrbot.core.platform.astr_message_event import current_message_event
+
+        provider = self.provider()
+        extra = {}
+        event = SimpleNamespace(
+            unified_msg_origin="mock-chat",
+            get_extra=extra.get,
+            set_extra=extra.__setitem__,
+            send=AsyncMock(),
+        )
+        token = current_message_event.set(event)
+        try:
+            for mode in ("rpc_unsupported", "chunk_unsupported", "text_only"):
+                before = len(self.peer.prompts)
+                self.peer.mode = mode
+                with self.assertRaises(CursorError) as error:
+                    await provider.text_chat(prompt="read", image_urls=[str(self.first)])
+                self.assertEqual(error.exception.code, "image_unsupported")
+                self.assertIn("这个模型看不了图喵。", str(error.exception))
+                self.assertNotIn("PRIVATE_PAYLOAD", str(error.exception))
+                self.assertEqual(len(self.peer.prompts), before + 1)
+        finally:
+            current_message_event.reset(token)
+        event.send.assert_awaited_once()
+        self.assertEqual(event.send.await_args.args[0].chain[0].text, "这个模型看不了图喵。")
+
+    async def test_model_reply_that_mentions_unsupported_images_stays_a_reply(self):
+        provider = self.provider()
+        self.peer.mode = "quoted"
+        reply = await provider.text_chat(image_urls=[str(self.first)])
+        self.assertIn("this shows a cat", reply.completion_text)
 
     async def test_image_types_and_payload_are_absent_from_plugin_logs(self):
         from PIL import Image

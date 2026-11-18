@@ -18,6 +18,8 @@ const codes = {
   upstream_retryable: "上游短暂故障",
   cli_failed: "CLI 请求失败",
   model_unavailable: "模型不可用",
+  image_unsupported: "不支持图片输入",
+  image_unavailable: "上游拒绝图片",
   ask_unavailable: "Ask 模式不可用",
   runner_in_use: "运行器被占用",
   ssh_auth_denied: "SSH 认证失败",

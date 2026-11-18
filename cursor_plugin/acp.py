@@ -99,7 +99,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.3.2"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.0"},
                 },
                 timeout=30,
             )
@@ -168,7 +168,7 @@ class ACPClient:
                 capabilities.get("promptCapabilities") if isinstance(capabilities, dict) else None
             )
             if not isinstance(supported, dict) or supported.get("image") is not True:
-                raise CursorError("image_unavailable")
+                raise CursorError("image_unsupported")
         state = {"parts": [], "size": 0, "error": None}
         self.turns[session_id] = state
         try:
@@ -194,11 +194,12 @@ class ACPClient:
             text = "".join(state["parts"])
             if not text.strip():
                 raise CursorError("empty_output")
-            if images and (
-                classify_image_error(text, reply=True)
-                or classify_image_error(state["parts"][-1], reply=True)
-            ):
-                raise CursorError("image_unavailable")
+            if images:
+                image_error = classify_image_error(text, reply=True) or classify_image_error(
+                    state["parts"][-1], reply=True
+                )
+                if image_error:
+                    raise CursorError(image_error)
             error_code = classify_reply_error(text) or classify_chunk_tail_error(
                 text, state["parts"]
             )

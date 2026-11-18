@@ -282,20 +282,12 @@ async def verify(root):
         image_path.parent.mkdir(parents=True, exist_ok=True)
         with Image.new("RGB", (32, 32), "red") as fixture:
             fixture.save(image_path)
-        images = importlib.import_module(PREFIX + ".images")
-        with (
-            patch.object(images, "VERIFIED_IMAGE_MODELS", frozenset({MODEL})),
-            patch.dict(pending_provider.provider_config, {"modalities": ["text", "image"]}),
-        ):
-            assert await run_chat(
-                pending_provider, "MOCK_IMAGE_REQUIRED", image_urls=[str(image_path)]
-            ) == (
-                ["INLINE-IMAGE"],
-                0,
-            )
-        assert pending_provider.provider_config["modalities"] == ["text"]
+        assert pending_provider.provider_config["modalities"] == ["text", "image"]
+        assert await run_chat(
+            pending_provider, "MOCK_IMAGE_REQUIRED", image_urls=[str(image_path)]
+        ) == (["INLINE-IMAGE"], 0)
         print(
-            "PASS native AstrBot ProviderRequest carried a prepared image inline to the ACP subprocess in test mode"
+            "PASS native AstrBot ProviderRequest carried a prepared image inline to the selected mock ACP model"
         )
     finally:
         await host.stop()

@@ -13,8 +13,8 @@ from astrbot.api.provider import LLMResponse, Provider
 from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
 
 from . import runtime
-from .errors import CursorError, UnsupportedFeatureError, retry_stream_errors
-from .images import ImageInput, model_modalities
+from .errors import CursorError, ImageUnsupportedError, UnsupportedFeatureError, retry_stream_errors
+from .images import ImageInput
 from .metrics import record
 from .transcript import normalize_messages
 
@@ -28,7 +28,7 @@ def register_adapter(cls):
     if metadata is None:
         register_provider_adapter(
             runtime.PROVIDER_TYPE,
-            "Cursor 官方 CLI（纯文本 / Ask）",
+            "Cursor 官方 CLI（Ask）",
             default_config_tmpl=dict(TEMPLATE),
             provider_display_name="Cursor CLI",
         )(cls)
@@ -51,7 +51,7 @@ class CursorCLIProvider(Provider):
         # Declare this adapter's actual capabilities on its own config copy.
         cfg = runtime.settings()
         model = provider_config.get("model") or cfg["model"]
-        config = {**provider_config, "modalities": model_modalities(model)}
+        config = {**provider_config, "modalities": ["text", "image"]}
         super().__init__(config, provider_settings)
         self.set_model(model)
         self.engine = runtime.acquire_engine() if cfg["model"] else None
@@ -121,15 +121,24 @@ class CursorCLIProvider(Provider):
         except asyncio.CancelledError:
             raise
         except CursorError as exc:
-            if event is not None and isinstance(conversation_id, str) and conversation_id:
-                await self._notify_failure(event, exc.code)
+            image_message = (
+                self.settings["image_unsupported_message"]
+                if exc.code == "image_unsupported"
+                else None
+            )
+            if event is not None and (
+                image_message or isinstance(conversation_id, str) and conversation_id
+            ):
+                await self._notify_failure(event, exc.code, message=image_message)
+            if image_message is not None:
+                raise ImageUnsupportedError(image_message) from None
             raise
         except Exception:
             # Also sanitize failures while serializing framework content objects.
             raise CursorError("cli_failed") from None
 
     @staticmethod
-    async def _notify_failure(event, code):
+    async def _notify_failure(event, code, *, message=None):
         key = "_astrbot_cursor_failure_notice"
         try:
             if event.get_extra(key):
@@ -138,7 +147,9 @@ class CursorCLIProvider(Provider):
             await asyncio.wait_for(
                 event.send(
                     MessageChain().message(
-                        f"Cursor 本次未能回复（{code}），后续响应由 AstrBot 处理。"
+                        message
+                        if message is not None
+                        else f"Cursor 本次未能回复（{code}），后续响应由 AstrBot 处理。"
                     )
                 ),
                 timeout=2,
@@ -196,15 +207,17 @@ class CursorCLIProvider(Provider):
             image_input = None
             arguments = (prompt, contexts, system_prompt, extra_user_content_parts)
             options = {"max_bytes": self.settings["context_max_bytes"], "image_urls": image_urls}
-            if "image" in model_modalities(self.get_model()):
+            try:
+                messages = normalize_messages(*arguments, **options)
+            except UnsupportedFeatureError as exc:
+                if exc.feature != "image":
+                    raise
                 from astrbot.core.utils.astrbot_path import get_astrbot_temp_path
 
                 image_input = ImageInput(get_astrbot_temp_path())
                 messages = await asyncio.to_thread(
                     normalize_messages, *arguments, **options, image_input=image_input
                 )
-            else:
-                messages = normalize_messages(*arguments, **options)
             await runtime.ensure_model_validated()
             if self._closed:
                 raise CursorError("closed")

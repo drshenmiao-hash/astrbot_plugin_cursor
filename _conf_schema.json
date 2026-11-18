@@ -5,6 +5,12 @@
     "default": "",
     "hint": "可填 ACP modelId、唯一展示名或已支持的管理端 ID；启动/重载通过 ACP availableModels 校验。cursor-grok-4.6-high 映射到 grok-4.6。新建原生 id/model 使用解析后的 modelId；空/auto/default 不建模型，有歧义时报错，不自动换模型。"
   },
+  "image_unsupported_message": {
+    "description": "图片不支持时的回复",
+    "type": "string",
+    "default": "当前 Cursor 运行端或所选模型不支持图片输入。",
+    "hint": "运行端或模型明确拒绝图片能力时发送这段文字。最多 240 字，留空使用默认提示。"
+  },
   "ssh_host": {
     "description": "Cursor 专用容器的内部主机名",
     "type": "string",
