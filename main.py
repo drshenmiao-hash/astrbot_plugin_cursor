@@ -31,7 +31,7 @@ class CursorCLIPlugin(Star):
                 await runtime.stop_providers(self.context)
                 await runtime.initialize(self.context)
             except CursorError as exc:
-                runtime.record_startup_failure(exc.code)
+                runtime.record_startup_failure(exc.code, error=exc)
             except asyncio.TimeoutError:
                 runtime.record_startup_failure("startup_timeout")
             self._usage_page.register(self.context)
@@ -45,12 +45,15 @@ class CursorCLIPlugin(Star):
             unregister_adapter(self._adapter_type)
             self._adapter_type = None
         try:
-            await runtime.stop_validation()
+            await self._usage_page.stop_diagnostics()
         finally:
             try:
-                await runtime.stop_providers(self.context)
+                await runtime.stop_validation()
             finally:
-                await runtime.close_usage(self.context)
+                try:
+                    await runtime.stop_providers(self.context)
+                finally:
+                    await runtime.close_usage(self.context)
 
     @filter.command("cursor_source")
     async def cursor_source(self, event: AstrMessageEvent):

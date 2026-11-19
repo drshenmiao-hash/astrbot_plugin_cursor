@@ -22,6 +22,9 @@ class ACPClient:
         self.output_limit = output_limit
         self.ready = ready or {"cwd": "/work", "transport": "local"}
         self.initialized = None
+        self.startup_stage = "runner"
+        self.handshake_complete = False
+        self.authenticated = False
         self.pending = {}
         self.turns = {}
         self.session_models = {}
@@ -44,7 +47,7 @@ class ACPClient:
             if len(self.stderr_sample) < 8192:
                 self.stderr_sample.extend(chunk[: 8192 - len(self.stderr_sample)])
 
-    async def _write(self, message, *, image_prompt=False):
+    async def _write(self, message, *, image_prompt=False, prompt_state=None):
         raw = json.dumps(message, ensure_ascii=False, separators=(",", ":")).encode() + b"\n"
         limit = self.frame_limit + (MAX_IMAGE_FRAME_BYTES if image_prompt else 0)
         if len(raw) > limit:
@@ -54,6 +57,8 @@ class ACPClient:
         async with self._write_lock:
             try:
                 self.process.stdin.write(raw)
+                if prompt_state is not None:
+                    prompt_state["write_started"] = True
                 await self.process.stdin.drain()
             except (BrokenPipeError, ConnectionResetError):
                 raise CursorError("process_exited") from None
@@ -67,12 +72,16 @@ class ACPClient:
         future = asyncio.get_running_loop().create_future()
         self.pending[request_id] = future
         try:
+            prompt_state = (
+                self.turns.get(params.get("sessionId")) if method == "session/prompt" else None
+            )
             sent_bytes = await self._write(
                 {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params},
                 image_prompt=image_prompt,
+                **({"prompt_state": prompt_state} if prompt_state is not None else {}),
             )
-            if method == "session/prompt" and params.get("sessionId") in self.turns:
-                self.turns[params["sessionId"]]["wire_bytes"] = sent_bytes
+            if prompt_state is not None:
+                prompt_state["wire_bytes"] = sent_bytes
             if timeout is None:
                 return await future
             return await asyncio.wait_for(future, timeout)
@@ -89,6 +98,7 @@ class ACPClient:
     async def start(self):
         try:
             await asyncio.wait_for(asyncio.shield(self._ready_future), 20)
+            self.startup_stage = "handshake"
             self.initialized = await self.call(
                 "initialize",
                 {
@@ -104,7 +114,10 @@ class ACPClient:
             )
             if self.initialized.get("protocolVersion") != 1:
                 raise CursorError("protocol")
+            self.handshake_complete = True
+            self.startup_stage = "auth"
             await self.call("authenticate", {"methodId": "cursor_login"}, timeout=30)
+            self.authenticated = True
         except asyncio.TimeoutError:
             raise CursorError("startup_timeout") from None
 
@@ -221,8 +234,15 @@ class ACPClient:
         finally:
             if stats is not None:
                 stats.update(wire_bytes=state.get("wire_bytes", 0), output_bytes=state["size"])
+                stats["delivery"] = (
+                    "sent"
+                    if state.get("wire_bytes")
+                    else "unconfirmed"
+                    if state.get("write_started")
+                    else "not_sent"
+                )
                 stats["model_id"] = (
-                    self.session_models.get(session_id) if state.get("wire_bytes", 0) else None
+                    self.session_models.get(session_id) if stats["delivery"] != "not_sent" else None
                 )
             self.turns.pop(session_id, None)
             self.last_activity = time.monotonic()

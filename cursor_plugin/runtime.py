@@ -11,6 +11,7 @@ from astrbot.api import logger
 from .engine import Engine
 from .errors import MESSAGES, CursorError
 from .models import ModelResolutionError, catalog_ids, resolve_model
+from .request_status import safe_transport
 from .settings import settings_from
 from .usage import UsageStore, format_summary
 
@@ -21,6 +22,7 @@ _engine = None
 _available_models = None
 _usage_store = None
 _startup_failure = None
+_startup_details = (None, None)
 _validation_task = None
 _retry_validation_after = 0.0
 _validation_stopped = False
@@ -137,12 +139,14 @@ def configure(config):
         _settings, \
         _available_models, \
         _startup_failure, \
+        _startup_details, \
         _validation_stopped, \
         _retry_validation_after
     _settings = settings_from(config)
     _settings["model"] = ""  # Never publish an unvalidated management/display ID.
     _available_models = None
     _startup_failure = None
+    _startup_details = (None, None)
     _validation_stopped = False
     _retry_validation_after = 0.0
     try:
@@ -153,18 +157,27 @@ def configure(config):
         pass
 
 
-def record_startup_failure(code):
-    global _startup_failure
+def record_startup_failure(code, *, error=None):
+    global _startup_failure, _startup_details
     if _startup_failure != code:
         _startup_failure = code
+        _startup_details = (None, None)
         logger.warning("cursor_provider_startup code=%s", code)
+    if error is not None and (error.stage or error.transport):
+        _startup_details = (error.stage, error.transport)
+
+
+def _startup_error():
+    error = CursorError(_startup_failure)
+    error.stage, error.transport = _startup_details
+    return error
 
 
 def _check_startup():
     if _validation_stopped:
         raise CursorError("closed")
     if _startup_failure:
-        raise CursorError(_startup_failure)
+        raise _startup_error()
 
 
 async def _run_validation(backoff):
@@ -187,7 +200,7 @@ async def _run_validation(backoff):
             logger.warning("cursor_model_validation code=%s attempt=%d", code, attempt)
             if code not in _TRANSIENT_VALIDATION_ERRORS:
                 break
-        record_startup_failure(code)
+        record_startup_failure(code, error=error)
         _retry_validation_after = time.monotonic() + _RECOVERY_COOLDOWN
         return error.with_traceback(None)
     finally:
@@ -205,7 +218,7 @@ async def ensure_model_validated(*, startup=False):
                 _startup_failure not in _TRANSIENT_VALIDATION_ERRORS
                 or time.monotonic() < _retry_validation_after
             ):
-                raise CursorError(_startup_failure)
+                raise _startup_error()
         elif not startup and _available_models is not None:
             return
         _validation_task = asyncio.create_task(_run_validation(_STARTUP_BACKOFF if startup else ()))
@@ -218,7 +231,9 @@ async def ensure_model_validated(*, startup=False):
     if isinstance(error, ModelResolutionError):
         raise ModelResolutionError(error.code, error.available_model_ids, error.candidates)
     if error is not None:
-        raise CursorError(error.code)
+        failed = CursorError(error.code)
+        failed.stage, failed.transport = error.stage, error.transport
+        raise failed
 
 
 async def stop_validation():
@@ -363,6 +378,27 @@ async def stop_providers(context):
     for failure in results:
         if isinstance(failure, BaseException):
             raise failure
+
+
+def live_connection(cfg):
+    # Read only. The UI must never lease or rotate a chat session.
+    engine = _engine
+    if engine is None or engine.closed or engine.client is None or engine.client.closed:
+        return None
+    # Resolved model changes don't affect the transport, whereas credentials,
+    # paths and Runner settings must still match before reusing health evidence.
+    if any(
+        engine.cfg.get(key) != value
+        for key, value in cfg.items()
+        if key not in {"model", "requested_model"}
+    ):
+        return None
+    client = engine.client
+    return {
+        "transport": safe_transport(engine.owner.kind) if engine.owner is not None else None,
+        "handshake": client.handshake_complete,
+        "authenticated": client.authenticated,
+    }
 
 
 def engine_health():

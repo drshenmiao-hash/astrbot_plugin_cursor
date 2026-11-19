@@ -62,6 +62,9 @@ MESSAGES = {
 
 class CursorError(RuntimeError):
     retryable = False
+    stage = None
+    transport = None
+    handshake_complete = False
 
     def __init__(self, code):
         self.code = code if isinstance(code, str) and code in MESSAGES else "cli_failed"

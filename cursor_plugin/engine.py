@@ -13,6 +13,7 @@ from .logic import history_state, reconcile_history
 from .metrics import record
 from .protocol import encode
 from .queueing import RequestQueue
+from .request_status import failure_stage, safe_transport
 from .transcript import render_messages
 
 
@@ -38,6 +39,9 @@ class Job:
     sequence: int | None = None
     stats_session: str | None = None
     model_id: str | None = None
+    transport: str | None = None
+    stage: str = "queue"
+    delivery: str = "not_sent"
     images: dict | None = None
     sent_image_blocks: int = 0
     sent_image_base64_bytes: int = 0
@@ -155,37 +159,54 @@ class Engine:
         job.output_bytes = len(reply.encode())
         return reply
 
-    async def _new_client(self):
+    async def _new_client(self, *, startup_timeout=None):
         owner = self.owner_factory(self.cfg)
         client = None
         try:
-            process, ready = await owner.start()
-            client = ACPClient(
-                process,
-                frame_limit=max(self.cfg["context_max_bytes"] * 2, self.cfg["output_max_bytes"])
-                + 65536,
-                output_limit=self.cfg["output_max_bytes"],
-                ready=ready,
-            )
-            await client.start()
+            async with asyncio.timeout(startup_timeout):
+                process, ready = await owner.start()
+                client = ACPClient(
+                    process,
+                    frame_limit=max(self.cfg["context_max_bytes"] * 2, self.cfg["output_max_bytes"])
+                    + 65536,
+                    output_limit=self.cfg["output_max_bytes"],
+                    ready=ready,
+                )
+                await client.start()
             self.owner, self.client = owner, client
         except BaseException as exc:
-            code = exc.code if isinstance(exc, CursorError) else "cli_failed"
+            code = (
+                exc.code
+                if isinstance(exc, CursorError)
+                else "startup_timeout"
+                if isinstance(exc, TimeoutError)
+                else "cli_failed"
+            )
             if client is not None and isinstance(exc, CursorError) and exc.code == "process_exited":
                 try:
                     await asyncio.wait_for(asyncio.shield(client._stderr_task), 1)
                 except asyncio.TimeoutError:
                     pass
-                if owner.kind == "ssh":
+                if owner.kind == "ssh" and client.startup_stage == "runner":
                     code = ssh_error_code(bytes(client.stderr_sample))
                 elif b"bwrap" in client.stderr_sample:
                     code = "sandbox_unavailable"
-            if client is not None:
-                await client.close()
-            await owner.close()
+            stage = failure_stage(code, client.startup_stage if client is not None else "runner")
+            try:
+                if client is not None:
+                    await client.close()
+            finally:
+                try:
+                    await owner.close()
+                except CursorError as cleanup:
+                    cleanup.stage, cleanup.transport = "runner", safe_transport(owner.kind)
+                    raise
             if isinstance(exc, Exception):
-                record("process_start_failed", transport=owner.kind, code=code)
-                raise CursorError(code) from None
+                record("process_start_failed", transport=owner.kind, code=code, stage=stage)
+                error = CursorError(code)
+                error.stage, error.transport = stage, safe_transport(owner.kind)
+                error.handshake_complete = bool(client and client.handshake_complete)
+                raise error from None
             raise
 
     async def _reset_client(self, reason):
@@ -241,7 +262,13 @@ class Engine:
                     await self._reset_client("session_limit" if exhausted else "process_exited")
                     job.process_reused = False
                 if self.client is None:
+                    job.stage = "runner"
                     await self._start_chat_client(job.deadline)
+                job.transport = safe_transport(
+                    self.owner.kind
+                    if self.owner
+                    else getattr(self.client, "ready", {}).get("transport")
+                )
                 cached, _ = self._reuse(job.messages, job.scope)
                 if cached is None:
                     self.session_slots += 1
@@ -316,6 +343,7 @@ class Engine:
         )
         if not job.scope:
             job.reset_reason = "no_stable_session_key"
+        job.stage = "model"
         session_id = cached["session_id"] if cached else await client.new_session(self.cfg["model"])
         delta, image_blocks = prompt_images(delta, job.images or {})
         job.historical_images_not_attached = sum(
@@ -368,6 +396,7 @@ class Engine:
             job.wire_bytes = stats.get("wire_bytes", job.wire_bytes)
             job.output_bytes = stats.get("output_bytes", job.output_bytes)
             job.model_id = stats.get("model_id")
+            job.delivery = stats.get("delivery", "sent" if job.wire_bytes else "not_sent")
             if job.wire_bytes:
                 job.sent_image_blocks = len(image_blocks)
                 job.sent_image_base64_bytes = sum(len(block["data"]) for block in image_blocks)
@@ -419,6 +448,8 @@ class Engine:
             except CursorError as exc:
                 code = exc.code
                 error = exc
+                job.stage = exc.stage or job.stage
+                job.transport = exc.transport or job.transport
                 if isinstance(exc, ImageLimitError):
                     job.image_limit = exc.metadata
             except asyncio.CancelledError:
@@ -461,6 +492,9 @@ class Engine:
             request_id=job.request_id,
             session=job.stats_session or job.scope,
             model_id=job.model_id,
+            transport=job.transport,
+            stage=failure_stage(code, job.stage, sent=job.delivery != "not_sent"),
+            delivery=job.delivery,
             code=code,
             input_bytes=job.input_bytes,
             sent_input_bytes=job.sent_bytes,

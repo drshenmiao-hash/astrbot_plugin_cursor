@@ -8,6 +8,8 @@ _FIELDS = {
     "session",
     "event",
     "transport",
+    "stage",
+    "delivery",
     "code",
     "input_bytes",
     "sent_input_bytes",

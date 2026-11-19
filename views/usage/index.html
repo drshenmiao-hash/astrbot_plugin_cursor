@@ -51,6 +51,35 @@
         </div>
       </div>
     </section>
+    <section class="panel connectivity" aria-labelledby="connectivity-title" hidden id="connectivity">
+      <h2 id="connectivity-title">连通性诊断</h2>
+      <div class="diagnostic-block">
+        <h3>最近一次实际请求</h3>
+        <p id="recent-status" role="status">正在读取请求记录…</p>
+        <dl id="recent-request" hidden>
+          <div><dt>时间 · UTC</dt><dd id="recent-time"></dd></div>
+          <div><dt>实际 ACP 模型</dt><dd id="recent-model"></dd></div>
+          <div><dt>Runner</dt><dd id="recent-runner"></dd></div>
+          <div><dt>结果</dt><dd id="recent-result"></dd></div>
+          <div><dt>耗时</dt><dd id="recent-duration"></dd></div>
+        </dl>
+        <p id="recent-reason" hidden></p>
+      </div>
+      <div class="diagnostic-actions">
+        <div class="diagnostic-block">
+          <button id="check-connection" type="button" disabled aria-describedby="check-hint">检查连接</button>
+          <p id="check-hint">检查 Runner、CLI、ACP 和认证，无模型请求。</p>
+          <p id="check-status" role="status" hidden></p>
+          <dl id="check-result" hidden></dl>
+        </div>
+        <div class="diagnostic-block">
+          <button id="test-model" type="button" disabled aria-describedby="test-hint">测试模型</button>
+          <p id="test-hint">向当前配置的模型发送一条测试请求，可能消耗 Cursor 额度。</p>
+          <p id="test-status" role="status" hidden></p>
+          <dl id="test-result" hidden></dl>
+        </div>
+      </div>
+    </section>
     <div id="dashboard" hidden>
       <section class="runtime" aria-labelledby="runtime-title">
         <div class="runtime-heading">

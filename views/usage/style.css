@@ -93,3 +93,16 @@ summary { cursor: pointer; font-size: 13px; }
   .runtime, .metric, .panel { padding: 12px; }
   .chart { height: 134px; }
 }
+
+.connectivity { margin-bottom: 12px; }
+.diagnostic-block { min-width: 0; padding-top: 12px; }
+.diagnostic-block h3 { margin: 0 0 8px; font-size: 14px; }
+.diagnostic-block p { margin-top: 7px; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.diagnostic-block dl { display: grid; gap: 8px; margin-top: 8px; }
+#recent-request { grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)); }
+.diagnostic-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-top: 12px; border-top: 1px solid var(--border); }
+#check-result > div, #test-result > div { display: grid; grid-template-columns: minmax(5em, 1fr) 4fr; gap: 8px; }
+#check-result dd, #test-result dd { margin-top: 0; }
+@media (max-width: 560px) {
+  .diagnostic-actions { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+}

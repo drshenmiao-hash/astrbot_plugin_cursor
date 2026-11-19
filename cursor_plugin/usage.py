@@ -12,6 +12,8 @@ from pathlib import Path
 
 from astrbot.api import logger
 
+from .request_status import request_status, safe_transport
+
 DISCLAIMER = "Cursor 插件本地统计，不是 Cursor 账单、套餐余额或官方消耗。"
 _NUMBERS = (
     "duration_ms",
@@ -62,6 +64,11 @@ class UsageStore:
                 process_reused INTEGER NOT NULL, reused INTEGER NOT NULL,
                 reset_reason TEXT NOT NULL
             )""")
+            db.execute("BEGIN IMMEDIATE")
+            existing = {column[1] for column in db.execute("PRAGMA table_info(requests)")}
+            for name in ("finished_at", "transport", "stage", "delivery", "image_limit_kind"):
+                if name not in existing:
+                    db.execute(f"ALTER TABLE requests ADD COLUMN {name} TEXT")
             db.execute("CREATE INDEX IF NOT EXISTS requests_day ON requests(day)")
         # One storage worker only; no model workers, queue limits or sessions change.
         self._writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="cursor-local-usage")
@@ -88,7 +95,8 @@ class UsageStore:
         when = at or datetime.now(timezone.utc)
         if when.tzinfo is None:
             raise ValueError("Statistics timestamps must include a timezone")
-        day = when.astimezone(timezone.utc).date().isoformat()
+        when = when.astimezone(timezone.utc)
+        day = when.date().isoformat()
         # Only metadata columns are accepted. Never serialize the original event.
         numbers = [max(0, int(data.get(key) or 0)) for key in _NUMBERS]
         row = (
@@ -101,6 +109,11 @@ class UsageStore:
             int(bool(data.get("process_reused"))),
             int(bool(data.get("reused"))),
             data.get("reset_reason") or "",
+            when.isoformat(timespec="milliseconds"),
+            safe_transport(data.get("transport")),
+            data.get("stage"),
+            data.get("delivery"),
+            data.get("image_limit_kind"),
         )
         with self._lock:
             if self._closed:
@@ -110,7 +123,14 @@ class UsageStore:
 
     def _write(self, row):
         with self._connect() as db:
-            db.execute("INSERT OR IGNORE INTO requests VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+            db.execute(
+                """INSERT OR IGNORE INTO requests (
+                    request_id, day, session, model_id, code, duration_ms, queue_ms,
+                    input_bytes, sent_input_bytes, wire_bytes, output_bytes, process_reused,
+                    reused, reset_reason, finished_at, transport, stage, delivery, image_limit_kind
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                row,
+            )
 
     def _write_record(self, row):
         try:
@@ -192,6 +212,12 @@ class UsageStore:
                         date_filter,
                     )
                 ]
+            recent = db.execute(
+                """SELECT finished_at, day, model_id, transport, duration_ms, code, stage,
+                          delivery, wire_bytes, reset_reason, image_limit_kind
+                   FROM requests WHERE reset_reason NOT IN ('cached_reply', 'no_new_user_input')
+                   ORDER BY rowid DESC LIMIT 1"""
+            ).fetchone()
         labels = [(start + timedelta(days=offset)).isoformat() for offset in range(days)]
         return {
             "notice": DISCLAIMER,
@@ -199,6 +225,7 @@ class UsageStore:
             "start": date_filter[0],
             "end": date_filter[1],
             "totals": total,
+            "recent_request": request_status(recent) if recent is not None else None,
             "trend": [
                 trend.get(label, {"label": label, "requests": 0, "failed": 0}) for label in labels
             ],

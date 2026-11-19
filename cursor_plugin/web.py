@@ -1,8 +1,11 @@
-"""Read-only usage endpoint carried by AstrBot's authenticated page bridge."""
+"""Usage and administrator diagnostics via AstrBot's authenticated page bridge."""
+
+import asyncio
 
 from astrbot.api import logger
 
-from .runtime import usage_dashboard
+from .connectivity import check_connection, test_model
+from .runtime import live_connection, settings, usage_dashboard
 from .usage import DASHBOARD_RANGES
 
 ROUTE = "/astrbot_plugin_cursor/usage/dashboard"
@@ -13,6 +16,7 @@ class UsagePage:
     def __init__(self):
         self.active = False
         self._context = None
+        self._diagnostic_task = None
 
     def register(self, context):
         self._context = context
@@ -27,6 +31,18 @@ class UsagePage:
             # AstrBot 4.29/4.30 replace routes on registration and expose no
             # unregister method. Remove only this instance's handler.
             apis[:] = [api for api in apis if not (api[0] == ROUTE and api[1] == self.handle)]
+
+    async def stop_diagnostics(self):
+        task = self._diagnostic_task
+        if task is not None:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _diagnose(self, action):
+        cfg = settings()
+        operation = check_connection if action == "check" else test_model
+        return await operation(cfg, live=live_connection(cfg))
 
     async def handle(self):
         from astrbot.api.web import json_response, request
@@ -45,6 +61,33 @@ class UsagePage:
         if not self.active:
             return error("Cursor 插件当前已停止。", 503)
         body = await request.json(default=None)
+        if isinstance(body, dict) and "action" in body:
+            admin = self._context.get_config().get("dashboard", {}).get("username")
+            if username != admin:
+                return error("只有 AstrBot 管理员可以执行诊断。", 403)
+            action = body["action"]
+            if len(body) != 1 or action not in ("check", "test"):
+                return error("诊断参数无效。", 400)
+            if self._diagnostic_task is not None:
+                return error("已有诊断正在执行，请稍后再试。", 409)
+            task = asyncio.create_task(self._diagnose(action))
+            self._diagnostic_task = task
+            try:
+                result = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                if not self.active and not asyncio.current_task().cancelling():
+                    return error("Cursor 插件当前已停止。", 503)
+                if not task.done() and not task.cancelling():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                raise
+            except Exception:
+                logger.warning("cursor_diagnostic_web code=diagnostic_failed action=%s", action)
+                return error("诊断未完成，请稍后重试。", 503)
+            finally:
+                self._diagnostic_task = None
+            return json_response({"status": "success", "data": result}, headers=_NO_CACHE)
+
         days = body.get("days") if isinstance(body, dict) else None
         if type(days) is not int or days not in DASHBOARD_RANGES:
             return error("请选择近 7、30 或 90 天。", 400)

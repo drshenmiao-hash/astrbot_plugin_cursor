@@ -26,6 +26,7 @@ from .errors import (
 )
 from .images import ImageInput
 from .metrics import record
+from .request_status import failure_stage
 from .transcript import normalize_messages
 
 _SESSION_SALT = secrets.token_bytes(32)
@@ -210,6 +211,7 @@ class CursorCLIProvider(Provider):
             scope = hashlib.blake2s(raw.encode(), key=_SESSION_SALT, digest_size=16).hexdigest()
             stats_session = runtime.usage_session(raw)
 
+        stage = "preflight"
         try:
             if self._closed or (self.engine is not None and self.engine.closed):
                 raise CursorError("closed")
@@ -236,6 +238,7 @@ class CursorCLIProvider(Provider):
                 messages = await asyncio.to_thread(
                     normalize_messages, *arguments, **options, image_input=image_input
                 )
+            stage = "model"
             await runtime.ensure_model_validated()
             if self._closed:
                 raise CursorError("closed")
@@ -245,7 +248,8 @@ class CursorCLIProvider(Provider):
                 raise CursorError("model")
             if self.engine is None:
                 self.engine = runtime.acquire_engine()
-        except CursorError as exc:
+        except Exception as failure:
+            exc = failure if isinstance(failure, CursorError) else CursorError("cli_failed")
             if exc.code != "closed" and self.engine is not None:
                 self.engine.last_failure = exc.code
             record(
@@ -253,11 +257,16 @@ class CursorCLIProvider(Provider):
                 request_id=uuid.uuid4().hex,
                 session=stats_session or scope,
                 code=exc.code,
+                stage=failure_stage(exc.code, exc.stage or stage),
+                transport=exc.transport,
+                delivery="not_sent",
                 duration_ms=round((time.monotonic() - started) * 1000),
                 reset_reason="preflight",
                 **(exc.metadata if isinstance(exc, ImageLimitError) else {}),
             )
-            raise
+            if failure is exc:
+                raise
+            raise exc from None
 
         async def on_queued(depth):
             if event is not None:

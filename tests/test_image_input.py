@@ -12,10 +12,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from cursor_plugin import images, runtime
+from cursor_plugin import images, metrics, runtime
 from cursor_plugin.acp import ACPClient
 from cursor_plugin.errors import CursorError
 from cursor_plugin.provider import CursorCLIProvider
+from cursor_plugin.usage import UsageStore
 from tests.check_cursor_images import make_card
 
 MODEL = "mock-vision-model"
@@ -214,6 +215,9 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_limit_log_shows_current_count_bytes_and_pixels(self):
         provider = self.provider()
+        store = UsageStore(self.directory / "usage")
+        self.addCleanup(store.close)
+        self.enterContext(patch.object(metrics, "_usage_store", store))
         path = str(self.first)
         cases = (
             ("count", "MAX_IMAGES", 1, [path, path]),
@@ -235,6 +239,12 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(row["image_limit_kind"], kind)
                 self.assertEqual(row["image_limit_max"], maximum)
                 self.assertGreater(row["image_limit_actual"], maximum)
+                dashboard = await asyncio.to_thread(store.dashboard, 7)
+                recent = dashboard["recent_request"]
+                self.assertEqual(recent["outcome"], "图片预检拒绝，Cursor 请求未发送")
+                self.assertEqual((recent["stage"], recent["delivery"]), ("preflight", "not_sent"))
+                self.assertIsNone(recent["model_id"])
+        self.assertEqual(dashboard["totals"]["requests"], len(cases))
         self.assertEqual(self.peer.prompts, [])
 
     async def test_image_only_local_file_and_mixed_multiple_images_use_inline_blocks(self):
