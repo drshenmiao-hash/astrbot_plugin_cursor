@@ -14,7 +14,7 @@ CLI、登录或模型在启动时校验失败，页面会显示失败码和处�
 
 带有 AstrBot 对话 ID 的聊天如果因 Cursor 失败，每个消息事件最多收到一次提示。AstrBot 4.29.4 的插件回复钩子未提供实际备用 Provider 标识，所以提示只报告 Cursor 的失败码。备用模型的回复不计入 Cursor 统计。
 
-`request_scope` 日志只报告对话 ID、会话 ID 和消息事件是否存在。`history_comparison` 只记录历史长度、前缀、尾部和 system 是否变化的分类。AstrBot 原生聊天会传对话 ID，内置标题和历史压缩调用不传这两个会话字段。这些日志不含 ID 值、消息散列或正文。
+`request_scope` 日志只报告对话 ID、会话 ID 和消息事件是否存在。`history_comparison` 记录历史长度、前缀和尾部比较、system 是否变化、首个差异位置和字段名。AstrBot 原生聊天会传对话 ID，内置标题和历史压缩调用不传这两个会话字段。这些日志不含 ID 值、消息散列或正文。
 
 ## 管理员命令
 

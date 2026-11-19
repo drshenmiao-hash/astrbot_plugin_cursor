@@ -93,16 +93,16 @@ AstrBot 环境需有 OpenSSH 客户端；缺少时用 `deploy/Dockerfile.astrbot
 
 配置 `transport=ssh`、`ssh_host=cursor-cli`、`ssh_port=2222`，使用默认专用私钥及 known_hosts 路径。修改主机名/端口时同步 known_hosts，保留主机校验。只需在插件填写模型，原生模型使用自动解析出的 ACP ID。
 
-含清理回执的开发版本要求插件和运行器使用同一份源码。可先用 `/cursor_doctor` 检查 `runner_cleanup_protocol`。旧运行器会报 `runner_cleanup_unsupported`。独立校验结束后，只有运行器确认本次 ACP 子进程树已退出并释放锁，插件才发布校验结果。传输中断或回执超时会报 `cleanup_unverified`，可安全检查远端状态后再重载。
+SSH 清理回执要求插件和运行器的协议版本匹配。可先用 `/cursor_doctor` 检查 `runner_cleanup_protocol`。旧运行器会报 `runner_cleanup_unsupported`。独立校验结束后，只有运行器确认本次 ACP 子进程树已退出并释放锁，插件才发布校验结果。传输中断或回执超时会报 `cleanup_unverified`，可安全检查远端状态后再重载。
 
 SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。诊断分别返回客户端密钥、主机校验、SSH 版本、登录卷和 CLI 构建入口哈希。入口哈希校验不是对整个 Docker 镜像 digest 的远程证明。
 
 ## 安装插件与检查
 
-本次测试使用上述分支的源码，放入测试实例的 `data/plugins/astrbot_plugin_cursor/`。根目录包含 `main.py` 和 `metadata.yaml`；不要多嵌套一层目录。从仓库默认分支安装仍获得 main，不含本次自动注册补丁。
+在 AstrBot 插件页上传发布版源码 ZIP，或用仓库 URL 安装。手动安装时把源码放入 `data/plugins/astrbot_plugin_cursor/`，确保 `main.py` 和 `metadata.yaml` 直接位于插件根目录。默认分支和发布包都包含自动注册。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
-2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型；Key、API Base 留空，能力仅 text，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
+2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型；Key、API Base 留空，当前模型声明 text 和 image，由运行端及具体模型判断图片能力，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
 3. 以 AstrBot 管理员运行 `/cursor_doctor`。也可在插件根目录执行下列命令；配置 JSON 只包含插件设置，不包含令牌：
 
 ```bash
@@ -117,4 +117,4 @@ python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 
 先记录旧插件提交、AstrBot 镜像、CLI 镜像和配置，备份专用密钥及登录卷。获取新提交后，在测试编排构建新镜像并执行环境脚本；通过后再由你更新正式编排和插件。更新 CLI 时同步版本与官方发行包 SHA，重新确认 ACP、Ask 和凭据格式。
 
-升级会结束旧常驻进程，丢弃内存会话缓存，下一轮重发完整上下文。回滚恢复旧插件和对应镜像再重载；不要执行 `docker compose down -v`，它会删除登录卷。OpenAI OAuth 插件配置及 AstrBot 的备用模型设置无需调整。
+升级会结束旧常驻进程并清除内存会话缓存。下一轮用 AstrBot 保存的历史文本和当前轮图片重建会话。回滚恢复旧插件和对应镜像再重载；不要执行 `docker compose down -v`，它会删除登录卷。OpenAI OAuth 插件配置及 AstrBot 的备用模型设置无需调整。

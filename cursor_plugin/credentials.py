@@ -3,6 +3,8 @@
 import json
 import os
 import stat
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 from .errors import CursorError
 from .protocol import encode
@@ -57,9 +59,14 @@ def read_browser_credentials(path):
 
 def write_credentials(path, value):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    pending = path.with_name(".auth-pending.json")
-    fd = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, "wb") as target:
-        target.write(encode(value))
-    os.chmod(pending, 0o600)
-    os.replace(pending, path)
+    pending = None
+    try:
+        with NamedTemporaryFile(
+            dir=path.parent, prefix=".auth-", suffix=".json", delete=False
+        ) as target:
+            pending = Path(target.name)
+            target.write(encode(value))
+        os.replace(pending, path)
+    finally:
+        if pending is not None:
+            pending.unlink(missing_ok=True)

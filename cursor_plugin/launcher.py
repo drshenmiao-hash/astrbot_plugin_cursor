@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import signal
+import stat
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
@@ -169,12 +170,24 @@ class ProcessOwner:
             if mode == "local":
                 bundle = local_bundle(cfg)
                 self.master_auth = Path(cfg["cursor_auth_path"])
-                self.original_auth = read_browser_credentials(self.master_auth)
-                self.lock = open(self.master_auth.parent / ".astrbot-provider.lock", "a+b")
+                try:
+                    fd = os.open(
+                        self.master_auth.parent / ".astrbot-provider.lock",
+                        os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+                        0o600,
+                    )
+                except FileNotFoundError:
+                    raise CursorError("not_logged_in") from None
+                self.lock = os.fdopen(fd, "r+b")
+                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                    raise CursorError("config")
                 try:
                     fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise CursorError("runner_in_use") from None
+                # Read only after obtaining the lock, so the previous owner can
+                # finish persisting its refreshed session before we copy it.
+                self.original_auth = read_browser_credentials(self.master_auth)
                 home, work = root / "home", root / "work"
                 home.mkdir(mode=0o700)
                 work.mkdir(mode=0o700)

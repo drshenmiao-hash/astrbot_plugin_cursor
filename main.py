@@ -9,7 +9,7 @@ from astrbot.api.star import Context, Star, register
 from .cursor_plugin import runtime
 from .cursor_plugin.diagnostics import diagnose
 from .cursor_plugin.errors import CursorError
-from .cursor_plugin.provider import CursorCLIProvider
+from .cursor_plugin.provider import CursorCLIProvider, register_adapter, unregister_adapter
 from .cursor_plugin.web import UsagePage
 
 __all__ = ["CursorCLIPlugin", "CursorCLIProvider"]
@@ -20,24 +20,37 @@ class CursorCLIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         runtime.configure(config)
-        runtime.configure_usage(context)
         self._usage_page = UsagePage()
+        self._adapter_type = None
 
     async def initialize(self):
-        # Also stops providers retained when upgrading from a version whose teardown only closed the page.
-        await runtime.stop_providers(self.context)
+        self._adapter_type = register_adapter()
         try:
-            await runtime.initialize(self.context)
-        except CursorError as exc:
-            runtime.record_startup_failure(exc.code)
-        except asyncio.TimeoutError:
-            runtime.record_startup_failure("startup_timeout")
-        self._usage_page.register(self.context)
+            await runtime.open_usage(self.context)
+            try:
+                await runtime.stop_providers(self.context)
+                await runtime.initialize(self.context)
+            except CursorError as exc:
+                runtime.record_startup_failure(exc.code)
+            except asyncio.TimeoutError:
+                runtime.record_startup_failure("startup_timeout")
+            self._usage_page.register(self.context)
+        except BaseException:
+            await self.terminate()
+            raise
 
     async def terminate(self):
         self._usage_page.close()
-        await runtime.stop_validation()
-        await runtime.stop_providers(self.context)
+        if self._adapter_type is not None:
+            unregister_adapter(self._adapter_type)
+            self._adapter_type = None
+        try:
+            await runtime.stop_validation()
+        finally:
+            try:
+                await runtime.stop_providers(self.context)
+            finally:
+                await runtime.close_usage(self.context)
 
     @filter.command("cursor_source")
     async def cursor_source(self, event: AstrMessageEvent):

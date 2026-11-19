@@ -38,7 +38,7 @@
     "default": "/usr/bin/ssh"
   },
   "timeout_seconds": {
-    "description": "CLI 超时秒数（1–600）",
+    "description": "CLI 超时秒数（1–1800）",
     "type": "int",
     "default": 120,
     "hint": "从实际执行开始计时，不包含排队。超时发送 ACP 取消，5 秒内未确认则重置运行时；不自动重试。"

@@ -111,6 +111,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         old = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})
         self.manager.inst_map[self.model["id"]] = old
         self.manager.curr_provider_inst = old
+        provider_module.register_adapter()
         metadata = provider_cls_map["cursor_cli"]
         count = len(provider_registry)
         importlib.reload(provider_module)
@@ -160,6 +161,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 store.record({"event": "request_finished", "request_id": "prior", "code": "ok"})
                 metrics = importlib.import_module(main.runtime.__package__ + ".metrics")
                 with (
+                    patch.object(self.context, "_astrbot_cursor_usage_store", store),
                     patch.object(main.runtime, "_usage_store", store),
                     patch.object(metrics, "_usage_store", store),
                 ):

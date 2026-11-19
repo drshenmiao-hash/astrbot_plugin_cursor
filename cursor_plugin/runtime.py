@@ -64,15 +64,43 @@ def configure_usage(context, *, directory=None):
     return _usage_store
 
 
+async def _run_usage_io(operation, *args):
+    task = asyncio.create_task(asyncio.to_thread(operation, *args))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # A worker thread cannot be cancelled after it starts touching SQLite.
+        await task
+        raise
+
+
+async def open_usage(context):
+    await _run_usage_io(configure_usage, context)
+
+
+async def close_usage(context):
+    """Detach the writer and flush its queued records before plugin unload."""
+    global _usage_store
+    from .metrics import set_usage_store
+
+    store, _usage_store = _usage_store, None
+    set_usage_store(None)
+    if store is not None:
+        if getattr(context, "_astrbot_cursor_usage_store", None) is store:
+            delattr(context, "_astrbot_cursor_usage_store")
+        await _run_usage_io(store.close)
+
+
 def usage_session(raw):
     return _usage_store.session_label(raw) if _usage_store is not None else None
 
 
 async def local_usage(group="total", key=""):
-    if _usage_store is None:
+    store = _usage_store
+    if store is None:
         return "插件本地统计尚未初始化或无法写入，请检查插件数据目录权限；这不是 Cursor 账单。"
     try:
-        report = await asyncio.to_thread(_usage_store.summary, group, key)
+        report = await asyncio.to_thread(store.summary, group, key)
         return format_summary(report)
     except ValueError:
         return (
@@ -308,7 +336,8 @@ async def release_engine(engine):
     global _engine
     engine.references -= 1
     if engine.references == 0:
-        await engine.close()
+        if not engine.closed:
+            await engine.close()
         if _engine is engine:
             _engine = None
 
@@ -320,12 +349,20 @@ async def stop_providers(context):
         for instance in getattr(manager, "inst_map", {}).values()
         if getattr(instance, "_astrbot_cursor_plugin", False) is True
     ]
-    # Close each shared engine first so pending callers receive a request error.
-    # The marker survives AstrBot dropping the old module during a hot reload.
-    for engine in {provider.engine for provider in providers if provider.engine is not None}:
-        await engine.close()
-    for provider in providers:
-        await provider.terminate()
+    # Close shared engines before terminating adapters so pending callers see
+    # a provider error and AstrBot can apply its usual fallback.
+    engines = {p.engine for p in providers if p.engine is not None and not p.engine.closed}
+    if _engine is not None and not _engine.closed:
+        engines.add(_engine)
+    results = await asyncio.gather(*(engine.close() for engine in engines), return_exceptions=True)
+    results.extend(
+        await asyncio.gather(
+            *(provider.terminate() for provider in providers), return_exceptions=True
+        )
+    )
+    for failure in results:
+        if isinstance(failure, BaseException):
+            raise failure
 
 
 def engine_health():
@@ -358,21 +395,35 @@ async def _commit_configuration(config, updates):
     previous = {key: deepcopy(config[key]) if key in config else missing for key in changes}
     proposed = deepcopy(changes)
     config.update(changes)
+
+    async def save():
+        try:
+            if (
+                await config.save_config_async() is False
+                and await config.save_config_async() is False
+            ):
+                raise CursorError("registration_save_failed")
+        except BaseException as exc:
+            for key, value in previous.items():
+                # As in the reference plugin, do not overwrite a concurrent edit.
+                if config.get(key) != proposed[key]:
+                    continue
+                if value is missing:
+                    config.pop(key, None)
+                else:
+                    config[key] = value
+            if not isinstance(exc, Exception):
+                raise
+            raise CursorError("registration_save_failed") from None
+
+    # AstrBot writes the config in a worker thread. The write can still commit
+    # after its awaiter is cancelled, so let its own success/rollback finish.
+    saving = asyncio.create_task(save())
     try:
-        if await config.save_config_async() is False and await config.save_config_async() is False:
-            raise CursorError("registration_save_failed")
-    except BaseException as exc:
-        for key, value in previous.items():
-            # As in the reference plugin, do not overwrite a concurrent edit.
-            if config.get(key) != proposed[key]:
-                continue
-            if value is missing:
-                config.pop(key, None)
-            else:
-                config[key] = value
-        if not isinstance(exc, Exception):
-            raise
-        raise CursorError("registration_save_failed") from None
+        await asyncio.shield(saving)
+    except asyncio.CancelledError:
+        await asyncio.gather(saving, return_exceptions=True)
+        raise
 
 
 async def ensure_default_source_and_model(config):

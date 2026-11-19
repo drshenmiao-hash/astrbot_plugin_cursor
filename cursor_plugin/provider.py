@@ -10,7 +10,11 @@ import uuid
 
 from astrbot.api.event import MessageChain
 from astrbot.api.provider import LLMResponse, Provider
-from astrbot.core.provider.register import provider_cls_map, register_provider_adapter
+from astrbot.core.provider.register import (
+    provider_cls_map,
+    provider_registry,
+    register_provider_adapter,
+)
 
 from . import runtime
 from .errors import (
@@ -29,7 +33,8 @@ _SESSION_SALT = secrets.token_bytes(32)
 TEMPLATE = runtime._build_default_source_config()
 
 
-def register_adapter(cls):
+def register_adapter():
+    cls = CursorCLIProvider
     metadata = provider_cls_map.get(runtime.PROVIDER_TYPE)
     if metadata is None:
         register_provider_adapter(
@@ -48,7 +53,14 @@ def register_adapter(cls):
     return cls
 
 
-@register_adapter
+def unregister_adapter(cls):
+    metadata = provider_cls_map.get(runtime.PROVIDER_TYPE)
+    if metadata is not None and metadata.cls_type is cls:
+        provider_cls_map.pop(runtime.PROVIDER_TYPE)
+        if metadata in provider_registry:
+            provider_registry.remove(metadata)
+
+
 class CursorCLIProvider(Provider):
     _astrbot_cursor_plugin = True
 

@@ -40,7 +40,7 @@ def settings_from(config):
             ("max_sessions", 128, 1, 4096),
         ):
             value = config.get(name, default)
-            if isinstance(value, bool):
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
                 raise ValueError
             value = int(value)
             if not low <= value <= high:
@@ -63,5 +63,5 @@ def settings_from(config):
                     raise ValueError
             options[name] = value
         return options
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError, RuntimeError):
         raise CursorError("config") from None
