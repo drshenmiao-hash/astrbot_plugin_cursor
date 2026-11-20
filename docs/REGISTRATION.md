@@ -5,12 +5,12 @@
 安装或重载时：
 
 1. 在 `provider_sources` 中查找 `type=cursor_cli` 的来源，优先使用 ID 为 `cursor_cli` 的条目，否则复用已有 Cursor 来源。没有则创建。
-2. 来源 Key、API Base 留空。当前配置的原生模型声明 `modalities=["text", "image"]`，让 AstrBot 把图片交给此适配器。模型是否接受图片，以当前请求的 Cursor 返回为准。
+2. 来源的 Key 和 API Base 留空。AstrBot 4.29.4 的系统配置校验要求原生模型的 `key` 为列表，插件将其保存为 `[]`。当前配置的原生模型声明 `modalities=["text", "image"]`，让 AstrBot 把图片交给此适配器。模型是否接受图片，以当前请求的 Cursor 返回为准。
 3. 插件配置 `model_id` 明确有效时，先从 ACP 查询一次模型列表并按 [解析规则](MODEL_IDS.md) 得到 modelId，再查找同 ID 或同 Cursor 模型的条目。有则更新/复用，没有才新增。新建条目的 `id` 和 `model` 均使用解析后的 ACP modelId，不写入管理端 ID 或展示名，不自动替换成别的模型。
 4. 使用 AstrBot 配置的 `save_config_async()` 保存变更，同步 ProviderManager 的来源、模型列表。没有变更不重复保存。保存快照被更新版本取代时重试一次；保存失败则回滚自己这次仍未被并发修改的字段，给出固定错误。
 5. 冷启动时由 AstrBot 随后加载模型；运行中的插件安装或重载会加载自己的目标模型或刷新已有 Cursor 实例，最后恢复之前的当前模型选择，包括原先未选择模型的状态。
 
-`model_id` 为空、全空白、auto、auto-smart 或 default 时，仅确保来源存在，并在 AstrBot 日志明确提示不创建模型。这些无效输入不会触发模型发现，也不会自动选套餐模型。有效输入需要先通过 ACP 校验；没有登录或 CLI 不可达时明确失败。已有模型不删除，当前默认和备用引用不改。
+`model_id` 为空、全空白、auto、auto-smart 或 default 时，仅确保来源存在，并在 AstrBot 日志明确提示不创建模型。这些无效输入不会触发模型发现，也不会自动选套餐模型。有效输入需要先通过 ACP 校验；没有登录或 CLI 不可达时明确失败。已有模型不删除，当前默认和备用引用不改。安装或重载会把旧版 Cursor 模型的 `key: ""` 修正为 `key: []`。即使 ACP 校验失败，也会尝试修复已有 Cursor 条目的这一字段。Cursor 仍使用 CLI 登录凭据。
 
 ## 去重与保护范围
 
@@ -37,8 +37,10 @@
 python -m unittest -v tests.test_registration tests.test_history_reuse
 ```
 
-实际运行 31 项通过：15 项注册回归、16 项历史复用回归。完整输出见 [REGISTRATION_TEST_OUTPUT.txt](REGISTRATION_TEST_OUTPUT.txt)。
+初版实际运行 31 项通过：15 项注册回归、16 项历史复用回归。完整输出见 [REGISTRATION_TEST_OUTPUT.txt](REGISTRATION_TEST_OUTPUT.txt)。
 
-注册测试运行真实 `runtime.configure/initialize` 和配置规划/保存/回滚代码；AstrBot 配置保存、ProviderManager 及生成的 Provider 实例使用明确的内存替身。覆盖首次创建、重复加载、空/auto、默认/备用及 OAuth/DeepSeek 不变、text 能力、已有配置更新、别名、禁用、ID 冲突、冷/热启动和保存失败。没有调用 CLI、SSH、网络或真实账户；未覆盖实际 AstrBot WebUI 或生产安装。
+注册测试运行真实 `runtime.configure/initialize` 和配置规划/保存/回滚代码；AstrBot 配置保存、ProviderManager 及生成的 Provider 实例使用明确的内存替身。覆盖首次创建、重复加载、空/auto、默认/备用及 OAuth/DeepSeek 不变、text 能力、已有配置更新、别名、禁用、ID 冲突、冷/热启动和保存失败。没有调用 CLI、SSH、网络或真实账户。
+
+模型 Key 类型修复另用 `python -m tests.check_astrbot_lifecycle` 调用 AstrBot 4.29.4 的系统配置保存服务。模型 `key: ""` 会被拒绝；模型 `key: []` 会保存成功，落盘的 Cursor 来源继续保留 `key: ""`。[AstrBot 4.29.4 模型配置定义](https://github.com/AstrBotDevs/AstrBot/blob/v4.29.4/astrbot/core/config/default.py#L2972-L2977)
 
 回退本次提交可用 `git revert <本次提交号>`，再重载 Cursor Provider。已写入的配置不会被自动删除，以免破坏用户后来设置的引用；如需移除注册项，先确认没有默认/备用/会话引用，再在 AstrBot 模型设置中处理。

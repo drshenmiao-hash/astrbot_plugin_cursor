@@ -46,7 +46,7 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 | `known_hosts_file` | `/run/cursor-client/known_hosts` | 固定主机公钥 |
 | `ssh_binary` | `/usr/bin/ssh` | OpenSSH 客户端 |
 
-插件安装/重载时自动确保 `cursor_cli` 来源存在，Key、API Base 留空；来源模板声明文本，当前已校验的原生模型接收文本和图片。图片由运行端及实际模型判断，遇到拒绝会明确报错。重复加载会更新或复用已有配置，不重复新增。只在你自行选择后使用 Cursor，插件不切换当前默认模型，也不改 OpenAI OAuth、DeepSeek 或备用模型设置。
+插件安装/重载时自动确保 `cursor_cli` 来源存在，来源的 Key 和 API Base 留空，原生模型的 Key 保存为空列表。来源模板声明文本，当前已校验的原生模型接收文本和图片。图片由运行端及实际模型判断，遇到拒绝会明确报错。重复加载会更新或复用已有配置，不重复新增。只在你自行选择后使用 Cursor，插件不切换当前默认模型，也不改 OpenAI OAuth、DeepSeek 或备用模型设置。
 
 启动或重载时通过 ACP `session/new` 查询一次 `availableModels`，先精确匹配 `modelId`，再唯一匹配展示名或明确别名。`cursor-grok-4.6-high` 对应 `grok-4.6`，后者必须实际出现在 ACP 列表中；有歧义时报错。`cursor-admin models` 的管理端 ID 不作为最终判断依据，见 [模型 ID 解析规则](docs/MODEL_IDS.md)。
 

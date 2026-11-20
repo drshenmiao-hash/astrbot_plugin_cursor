@@ -162,6 +162,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         model = self.cursor_models()[0]
         self.assertEqual(model["id"], MODEL)
         self.assertEqual(model["model"], MODEL)
+        self.assertEqual(model["key"], [])
         self.assertEqual(model["provider_source_id"], source["id"])
         self.assertEqual(self.manager.reloads, [MODEL])
         self.assertIn(MODEL, self.manager.inst_map)
@@ -230,9 +231,65 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(source["modalities"], ["text"])
         self.assertEqual(model["modalities"], ["text", "image"])
         self.assertEqual(self.manager.inst_map[MODEL].config["modalities"], ["text", "image"])
+        self.assertEqual(source["key"], "")
+        self.assertEqual(model["key"], [])
+        self.assertEqual(self.manager.inst_map[MODEL].config["key"], [])
         for config in [source, model, self.manager.inst_map[MODEL].config]:
-            self.assertEqual(config["key"], "")
             self.assertEqual(config["api_base"], "")
+
+    async def test_legacy_cursor_model_keys_are_repaired_and_stay_lists_on_reload(self):
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        self.conf["provider"].extend(
+            [
+                {
+                    "id": MODEL,
+                    "model": MODEL,
+                    "provider_source_id": "cursor_cli",
+                    "key": "",
+                },
+                {
+                    "id": "disabled-cursor",
+                    "model": "other-model",
+                    "type": "cursor_cli",
+                    "enable": False,
+                    "key": "",
+                },
+            ]
+        )
+
+        await runtime.initialize(self.context)
+        self.assertEqual([m["key"] for m in self.conf["provider"][-2:]], [[], []])
+        self.assertEqual(self.cursor_sources()[0]["key"], "")
+        self.assertFalse(self.conf["provider"][-1]["enable"])
+        self.assertEqual(self.conf["provider"][-1]["model"], "other-model")
+        await runtime.initialize(self.context)
+        self.assertEqual([m["key"] for m in self.conf["provider"][-2:]], [[], []])
+        self.assertEqual(len(self.conf.saved), 1)
+
+    async def test_failed_model_validation_still_repairs_only_legacy_cursor_keys(self):
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        self.conf["provider"].append(
+            {
+                "id": MODEL,
+                "model": MODEL,
+                "provider_source_id": "cursor_cli",
+                "key": "",
+                "modalities": ["text", "image"],
+            }
+        )
+        expected = deepcopy(dict(self.conf))
+        expected["provider"][-1]["key"] = []
+        with patch.object(
+            runtime,
+            "ensure_model_validated",
+            new=AsyncMock(side_effect=CursorError("not_logged_in")),
+        ):
+            with self.assertRaises(CursorError) as error:
+                await runtime.initialize(self.context)
+        self.assertEqual(error.exception.code, "not_logged_in")
+        self.assertEqual(dict(self.conf), expected)
+        self.assertEqual(self.conf.saved, [expected])
+        self.assertEqual(self.manager.reloads, [])
 
     async def test_existing_source_and_model_are_updated_in_place(self):
         self.conf["provider_sources"].append(

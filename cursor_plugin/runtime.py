@@ -462,6 +462,24 @@ async def _commit_configuration(config, updates):
         raise
 
 
+def _is_cursor_model(model, source_ids):
+    sid = model.get("provider_source_id")
+    return sid in source_ids or (not sid and model.get("type") == PROVIDER_TYPE)
+
+
+async def _repair_legacy_model_keys(config):
+    source_ids = {
+        source["id"]
+        for source in config.get("provider_sources", [])
+        if source.get("type") == PROVIDER_TYPE
+    }
+    models = deepcopy(config.get("provider", []))
+    for model in models:
+        if _is_cursor_model(model, source_ids) and model.get("key") == "":
+            model["key"] = []
+    await _commit_configuration(config, {"provider": models})
+
+
 async def ensure_default_source_and_model(config):
     """Publish only our source/model; never change model selection or fallbacks."""
     sources = deepcopy(config.get("provider_sources", []))
@@ -481,12 +499,11 @@ async def ensure_default_source_and_model(config):
     source_ids = {s["id"] for s in owned_sources}
 
     def owned(model):
-        sid = model.get("provider_source_id")
-        return sid in source_ids or (not sid and model.get("type") == PROVIDER_TYPE)
+        return _is_cursor_model(model, source_ids)
 
     for item in models:
         if owned(item):
-            item.update(key="", api_base="", modalities=["text"])
+            item.update(key=[], api_base="", modalities=["text"])
     model_id = settings()["model"]
     target = None
     if not model_id:
@@ -529,7 +546,7 @@ async def ensure_default_source_and_model(config):
                 provider_source_id=source["id"],
                 type=PROVIDER_TYPE,
                 provider_type="chat_completion",
-                key="",
+                key=[],
                 api_base="",
                 modalities=["text", "image"],
             )
@@ -547,6 +564,11 @@ async def initialize(context):
     try:
         await ensure_model_validated(startup=True)
     except CursorError:
+        # The system config must remain saveable even while Cursor is unavailable.
+        try:
+            await _repair_legacy_model_keys(config)
+        except CursorError as exc:
+            logger.warning("cursor_model_key_repair code=%s", exc.code)
         # A retained, already closed adapter still points at the retired Python module.
         # Rebind it to this runtime so its next request can use the recovery gate.
         await _reload_host_models(context, None, stopped_only=True)
@@ -576,9 +598,7 @@ async def _reload_host_models(context, target_id, *, stopped_only=False):
     running = bool(instances) or getattr(manager, "_mcp_init_task", None) is not None
     try:
         for model in list(config.get("provider", [])):
-            own_model = model.get("provider_source_id") in source_ids or (
-                not model.get("provider_source_id") and model.get("type") == PROVIDER_TYPE
-            )
+            own_model = _is_cursor_model(model, source_ids)
             should_load = model["id"] in instances or (
                 running and model["id"] == target_id and model.get("enable", True)
             )

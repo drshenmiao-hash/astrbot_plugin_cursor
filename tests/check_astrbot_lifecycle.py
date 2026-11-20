@@ -118,6 +118,7 @@ async def verify_sessions(provider):
 async def verify(root):
     from astrbot.core import LogBroker, db_helper
     from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
+    from astrbot.dashboard.services.config_service import ConfigProfileService
 
     installed = root / "data/plugins" / PLUGIN
     shutil.copytree(
@@ -150,6 +151,39 @@ async def verify(root):
                 await asyncio.sleep(0.01)
 
     try:
+        system_config = host.astrbot_config_mgr.default_conf
+        cursor_model = next(model for model in system_config["provider"] if model["id"] == MODEL)
+        cursor_source = next(
+            source
+            for source in system_config["provider_sources"]
+            if source["id"] == cursor_model["provider_source_id"]
+        )
+        assert cursor_source["key"] == "" and cursor_model["key"] == []
+        profiles = ConfigProfileService(host, runtime={})
+        with patch.object(host, "reload_pipeline_scheduler", new_callable=AsyncMock) as reload:
+            cursor_model["key"] = ""
+            try:
+                await profiles.update_profile("default", dict(system_config))
+            except ValueError as exc:
+                assert "provider.key" in str(exc), exc
+            else:
+                raise AssertionError("AstrBot accepted the old string model key")
+            finally:
+                cursor_model["key"] = []
+            assert await profiles.update_profile("default", dict(system_config)) == "保存成功~"
+            reload.assert_awaited_once_with("default")
+        persisted = json.loads((root / "data/cmd_config.json").read_text(encoding="utf-8-sig"))
+        assert next(model for model in persisted["provider"] if model["id"] == MODEL)["key"] == []
+        assert (
+            next(
+                source for source in persisted["provider_sources"] if source["type"] == "cursor_cli"
+            )["key"]
+            == ""
+        )
+        print(
+            "PASS official AstrBot system config save rejects the old key string and persists the fixed types"
+        )
+
         first = manager.inst_map[MODEL]
         assert await run_chat(first, "普通回复") == (["OK"], 0)
         assert await run_chat(first, "MOCK_STREAM_FAILURE") == (["BACKUP"], 1)

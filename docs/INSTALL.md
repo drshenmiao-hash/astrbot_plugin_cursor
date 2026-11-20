@@ -102,7 +102,7 @@ SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。�
 在 AstrBot 插件页上传发布版源码 ZIP，或用仓库 URL 安装。手动安装时把源码放入 `data/plugins/astrbot_plugin_cursor/`，确保 `main.py` 和 `metadata.yaml` 直接位于插件根目录。默认分支和发布包都包含自动注册。
 
 1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
-2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型；Key、API Base 留空，当前模型声明 text 和 image，由运行端及具体模型判断图片能力，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
+2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型。来源的 Key 和 API Base 留空，原生模型的 Key 保存为 `[]`。当前模型声明 text 和 image，由运行端及具体模型判断图片能力，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
 3. 以 AstrBot 管理员运行 `/cursor_doctor`。也可在插件根目录执行下列命令；配置 JSON 只包含插件设置，不包含令牌：
 
 ```bash
