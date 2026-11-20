@@ -35,7 +35,7 @@ def catalog_ids(available_models):
     return sorted(ids)
 
 
-def resolve_model(requested, available_models):
+def resolve_model(requested, available_models, *, resolve_alias=True):
     ids = catalog_ids(available_models)
     if not isinstance(requested, str) or requested.strip().casefold() in {
         "",
@@ -47,6 +47,8 @@ def resolve_model(requested, available_models):
     # Exact IDs always win, even if a different entry has the same display name.
     if requested in ids:
         return requested
+    if not resolve_alias:
+        raise ModelResolutionError("model_unavailable", ids)
     candidates = {
         item["modelId"]
         for item in available_models

@@ -154,6 +154,18 @@ class TestConnection(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(store.dashboard(30)["totals"]["requests"], 1)
             self.assertNotIn("text", ok)
 
+    async def test_manual_resolves_configured_alias_only_without_validated_model(self):
+        self.cfg["requested_model"] = "cursor-mock-plan-model"
+        self.cfg["model"] = ""
+        result = await connectivity.test_model(self.cfg)
+        self.assertEqual((result["status"], result["model_id"]), ("passed", "mock-plan-model"))
+
+        self.cfg["model"] = self.cfg["requested_model"]
+        self.calls.clear()
+        result = await connectivity.test_model(self.cfg)
+        self.assertEqual((result["status"], result["code"]), ("failed", "model_unavailable"))
+        self.assertNotIn("session/prompt", self.calls)
+
     async def test_manual_uses_configured_model_and_no_retry_on_missing_model(self):
         self.cfg["model"] = self.cfg["requested_model"] = "unavailable-model"
         result = await connectivity.test_model(self.cfg)
@@ -274,6 +286,25 @@ class TestDiagnosticsAccess(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(closed.is_set())
             _, status, _ = await running
             self.assertEqual(status, 503)
+
+    async def test_unload_while_reading_request_body_does_not_start_diagnostics(self):
+        reading, resume = asyncio.Event(), asyncio.Event()
+
+        async def read_body(**kwargs):
+            reading.set()
+            await resume.wait()
+            return {"action": "test"}
+
+        self.request.json.side_effect = read_body
+        with patch.object(self.handler, "_diagnose", new_callable=AsyncMock) as diagnose:
+            handling = asyncio.create_task(self.handler.handle())
+            await asyncio.wait_for(reading.wait(), 1)
+            self.handler.close()
+            await self.handler.stop_diagnostics()
+            resume.set()
+            _, status, _ = await handling
+        self.assertEqual(status, 503)
+        diagnose.assert_not_awaited()
 
     async def test_admin_dispatches_current_settings_with_no_cache(self):
         cfg = settings_from({"model_id": "grok-4.6"})

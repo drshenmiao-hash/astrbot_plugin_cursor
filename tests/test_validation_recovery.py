@@ -60,6 +60,30 @@ class ValidationRecovery(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.fetch.await_count, 4)
         self.assertIsNone(runtime._startup_failure)
 
+    async def test_startup_budget_bounds_network_retries_and_leaves_recovery_available(self):
+        runtime.configure({"model_id": "grok-4.6", "queue_timeout_seconds": 3600})
+        cleaned = asyncio.Event()
+
+        async def blocked_catalog():
+            try:
+                await asyncio.Future()
+            finally:
+                cleaned.set()
+
+        self.fetch.side_effect = blocked_catalog
+        with patch.object(runtime, "_STARTUP_VALIDATION_BUDGET", 0.025):
+            with self.assertRaisesRegex(CursorError, "startup_timeout"):
+                await asyncio.wait_for(runtime.ensure_model_validated(startup=True), 1)
+        self.assertTrue(cleaned.is_set())
+        self.fetch.assert_awaited_once()
+        self.assertIsNone(runtime._validation_task)
+
+        self.fetch.side_effect = None
+        self.fetch.return_value = self.catalog
+        runtime._retry_validation_after = 0
+        await runtime.ensure_model_validated()
+        self.assertEqual(runtime.resolve_model_id("grok-4.6"), "grok-4.6")
+
     async def test_cancellation_does_not_cancel_shared_validation(self):
         started = asyncio.Event()
         finish = asyncio.Event()

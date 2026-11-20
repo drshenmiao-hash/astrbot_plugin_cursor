@@ -28,8 +28,7 @@ class CursorCLIPlugin(Star):
         try:
             await runtime.open_usage(self.context)
             try:
-                await runtime.stop_providers(self.context)
-                await runtime.initialize(self.context)
+                await runtime.initialize(self.context, stop_existing=True)
             except CursorError as exc:
                 runtime.record_startup_failure(exc.code, error=exc)
             except asyncio.TimeoutError:

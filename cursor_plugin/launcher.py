@@ -14,7 +14,7 @@ from .credentials import DENY, cli_env, read_browser_credentials, write_credenti
 from .errors import CursorError
 from .logic import classify_error
 from .metrics import record
-from .process import run_process
+from .process import run_process, wait_for_cleanup
 from .protocol import RUNNER_CLEANUP_CONFIRMED, RUNNER_CLEANUP_PROTOCOL
 
 
@@ -144,6 +144,7 @@ class ProcessOwner:
     def __init__(self, cfg):
         self.cfg = cfg
         self.process = None
+        self._close_task = None
         self.scratch = None
         self.lock = None
         self.kind = None
@@ -247,6 +248,19 @@ class ProcessOwner:
             raise CursorError("transport") from None
 
     async def close(self):
+        # A queue deadline or a shutdown may cancel the caller while the child
+        # is still running. Keep one cleanup in flight and hold the login lock
+        # until process shutdown has finished, even across repeated cancellation.
+        if self._close_task is None:
+            self._close_task = asyncio.create_task(self._close())
+        closing = self._close_task
+        try:
+            await wait_for_cleanup(closing)
+        finally:
+            if self._close_task is closing:
+                self._close_task = None
+
+    async def _close(self):
         proc, self.process = self.process, None
         try:
             if proc is not None and self.kind == "ssh":

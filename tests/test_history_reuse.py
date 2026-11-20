@@ -11,7 +11,7 @@ from copy import deepcopy
 from unittest.mock import patch
 
 from cursor_plugin.engine import Engine
-from cursor_plugin.logic import history_plan, history_state
+from cursor_plugin.logic import assistant_match_text, history_plan, history_state
 from cursor_plugin.settings import settings_from
 from cursor_plugin.transcript import normalize_messages
 
@@ -75,6 +75,26 @@ class HistoryDiagnostics(unittest.TestCase):
         plan = history_plan(old, [*old[2:], {"role": "user", "content": "new"}])
         self.assertFalse(plan["reused"])
         self.assertEqual(plan["history_difference"]["history_change"], "window_shifted")
+
+    def test_assistant_block_matching_preserves_unclosed_and_nested_tags(self):
+        cases = [
+            ("A<think>first</think>B<thinking>second</thinking>C", "ABC"),
+            ("A<think>unfinished<thinking>hidden</thinking>B", "A<think>unfinishedB"),
+            ("A<think>x<think>y</think>z</think>B", "Az</think>B"),
+            (
+                "A <astrna_reply_target>x<astrna_quoted_sender>y</astrna_quoted_sender>"
+                "z</astrna_reply_target>\n  B",
+                "A\n  B",
+            ),
+        ]
+        for original, expected in cases:
+            with self.subTest(original=original):
+                self.assertEqual(assistant_match_text(original), expected)
+
+    def test_long_unclosed_assistant_blocks_are_retained(self):
+        unclosed = "<think><thinking><astrna_quoted_reply_target>" * 1500
+        raw = unclosed + "x" + " " * 20000 + "<astrna_quoted_sender>hidden</astrna_quoted_sender>y"
+        self.assertEqual(assistant_match_text(raw), unclosed + "x" + " " * 20000 + "y")
 
     def test_known_temporary_assistant_marker_is_only_normalized_for_matching(self):
         old = [

@@ -53,6 +53,15 @@ class ClockComparisonTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(system_view(text)["text"], text)
 
+    def test_long_whitespace_preserves_prose_and_recognizes_clock_fields(self):
+        spaces = " " * 30_000
+        ordinary = "A" + spaces + "B"
+        invalid_clock = "Current time: 04:51X" + spaces + "B"
+        clock = "[Current time: 04:51" + spaces + "；  Time zone: UTC]"
+        self.assertEqual(system_view(ordinary)["text"], ordinary)
+        self.assertEqual(system_view(invalid_clock)["text"], invalid_clock)
+        self.assertEqual(system_view(clock)["clocks"], [clock])
+
     def test_clock_only_system_entry_can_change_position_without_substantive_update(self):
         old = system("固定人格") + system("时间：2026-11-16 04:51")
         new = system("时间：2026-11-16 04:52") + system("固定人格")

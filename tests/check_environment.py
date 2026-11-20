@@ -72,6 +72,7 @@ async def run(args, cfg):
     from cursor_plugin.diagnostics import diagnose
     from cursor_plugin.engine import Engine
     from cursor_plugin.errors import CursorError
+    from cursor_plugin.models import resolve_model
     from cursor_plugin.transcript import render_messages
 
     metadata = []
@@ -305,6 +306,10 @@ async def run(args, cfg):
 
     with patch("cursor_plugin.engine.record", collect):
         try:
+            catalog = await asyncio.wait_for(
+                engine.available_models(), cfg["queue_timeout_seconds"]
+            )
+            cfg["model"] = resolve_model(cfg["model"], catalog)
             await check(TESTS[0], pid_reuse)
             await check(TESTS[1], concurrency)
             await check(TESTS[2], cancel_reconnect)

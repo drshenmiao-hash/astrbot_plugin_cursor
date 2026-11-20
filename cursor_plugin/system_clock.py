@@ -8,7 +8,7 @@ _LABEL = re.compile(
     r"\s*(?:[-*]\s+)?(?:\*\*)?"
     r"(?P<label>(?:当前|系统|本地|现在|今日)?(?:时间|日期|时刻|时区)|"
     r"(?:current\s+|system\s+|local\s+)?(?:time(?:\s+zone)?|date|datetime|timestamp)|timezone)"
-    r"(?:\*\*)?\s*[:：]\s*(?P<value>.+?)\s*",
+    r"(?:\*\*)?\s*[:：]\s*(?P<value>.+)",
     re.IGNORECASE,
 )
 _DATE = r"(?:\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{4}年\d{1,2}月\d{1,2}日)"
@@ -77,8 +77,8 @@ def _clock_line(line):
         if value.startswith(left) and value.endswith(right):
             value = value[len(left) : -len(right)].strip()
     # Mixed clock + substantive prose is deliberately left intact.
-    fields = re.split(r"\s*[;；|]\s*", value)
-    return bool(fields) and all(_field(field) for field in fields)
+    # Split at delimiters before trimming to scan each whitespace run once.
+    return all(_field(field.strip()) for field in re.split(r"[;；|]", value))
 
 
 def system_view(content):

@@ -120,7 +120,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             "_fetch_available_models",
             new=AsyncMock(return_value=[{"modelId": MODEL, "name": "Plan Model"}]),
         )
-        self.catalog_patch.start()
+        self.catalog = self.catalog_patch.start()
         self.addCleanup(self.catalog_patch.stop)
         self.conf = existing_config()
         self.manager = Manager(self.conf)
@@ -245,7 +245,12 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
                     "id": MODEL,
                     "model": MODEL,
                     "provider_source_id": "cursor_cli",
+                    "type": "cursor_cli",
+                    "provider_type": "chat_completion",
+                    "enable": True,
                     "key": "",
+                    "api_base": "",
+                    "modalities": ["text", "image"],
                 },
                 {
                     "id": "disabled-cursor",
@@ -253,6 +258,8 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
                     "type": "cursor_cli",
                     "enable": False,
                     "key": "",
+                    "api_base": "",
+                    "modalities": ["text"],
                 },
             ]
         )
@@ -290,6 +297,17 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(dict(self.conf), expected)
         self.assertEqual(self.conf.saved, [expected])
         self.assertEqual(self.manager.reloads, [])
+
+        self.conf["provider"][-1]["key"] = ""
+
+        async def fail_cleanup(_context):
+            self.assertEqual(self.conf["provider"][-1]["key"], [])
+            raise CursorError("cleanup_unverified")
+
+        with patch.object(runtime, "stop_providers", side_effect=fail_cleanup):
+            with self.assertRaisesRegex(CursorError, "cleanup_unverified"):
+                await runtime.initialize(self.context, stop_existing=True)
+        self.assertEqual(dict(self.conf), expected)
 
     async def test_existing_source_and_model_are_updated_in_place(self):
         self.conf["provider_sources"].append(
@@ -339,6 +357,57 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.conf["agent"]["config"]["model"]["provider_id"], model["id"])
         self.assertTrue(old.closed)
 
+    async def test_valid_existing_binding_survives_native_model_id_collision(self):
+        self.catalog.return_value = [{"modelId": MODEL}, {"modelId": "another-available-model"}]
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        self.conf["provider"].append(
+            {
+                "id": MODEL,
+                "model": "another-available-model",
+                "provider_source_id": "cursor_cli",
+                "key": [],
+                "api_base": "",
+                "modalities": ["text", "image"],
+            }
+        )
+        self.conf["agent"]["config"]["model"]["provider_id"] = MODEL
+        self.conf["provider_settings"]["fallback_chat_models"].append(MODEL)
+        before = deepcopy(dict(self.conf))
+        with self.assertLogs("astrbot", level="WARNING") as messages:
+            await runtime.initialize(self.context)
+
+        self.assertIn("保留已有绑定", "\n".join(messages.output))
+        self.assertEqual(dict(self.conf), before)
+        self.assertEqual(self.conf.saved, [])
+
+    async def test_existing_alias_wins_when_native_id_is_bound_to_another_model(self):
+        self.catalog.return_value = [
+            {"modelId": MODEL, "name": "Plan Model"},
+            {"modelId": "another-available-model"},
+        ]
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        bound = {
+            "id": MODEL,
+            "model": "another-available-model",
+            "provider_source_id": "cursor_cli",
+            "enable": False,
+            "key": [],
+            "modalities": ["text", "image"],
+        }
+        self.conf["provider"].extend(
+            [
+                bound,
+                {"id": "selected-model-alias", "model": "Plan Model", "type": "cursor_cli"},
+            ]
+        )
+
+        await runtime.initialize(self.context)
+
+        self.assertEqual(self.conf["provider"][-2], bound)
+        alias = self.conf["provider"][-1]
+        self.assertEqual((alias["id"], alias["model"]), ("selected-model-alias", MODEL))
+        self.assertEqual(self.manager.reloads, ["selected-model-alias"])
+
     async def test_disabled_source_stays_disabled_and_new_model_is_disabled(self):
         self.conf["provider_sources"].append(
             {"id": "custom-cursor", "type": "cursor_cli", "enable": False}
@@ -357,6 +426,53 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.conf["provider"], before)
         self.assertEqual(self.cursor_models(), [])
         self.assertEqual(self.manager.reloads, [])
+
+    async def test_explicit_foreign_type_on_cursor_source_blocks_matching_model_id(self):
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        self.conf["provider"].append(
+            {
+                "id": MODEL,
+                "model": MODEL,
+                "provider_source_id": "cursor_cli",
+                "type": "openai_chat_completion",
+                "enable": True,
+                "key": ["DUMMY_FOREIGN"],
+                "api_base": "https://example.invalid/foreign",
+                "modalities": ["text", "tool_use"],
+            }
+        )
+        before = deepcopy(dict(self.conf))
+        instance = self.manager.inst_map[MODEL] = object()
+
+        with self.assertLogs("astrbot", level="WARNING") as messages:
+            await runtime.initialize(self.context)
+
+        self.assertIn("其他提供商占用", "\n".join(messages.output))
+        self.assertEqual(dict(self.conf), before)
+        self.assertEqual(self.conf.saved, [])
+        self.assertEqual(self.manager.reloads, [])
+        self.assertIs(self.manager.inst_map[MODEL], instance)
+
+    async def test_legacy_key_repair_skips_explicit_foreign_types(self):
+        self.conf["provider_sources"].append(runtime._build_default_source_config())
+        self.conf["provider"].extend(
+            [
+                {"id": "inherited-cursor", "provider_source_id": "cursor_cli", "key": ""},
+                {
+                    "id": "foreign-on-cursor-source",
+                    "provider_source_id": "cursor_cli",
+                    "type": "openai_chat_completion",
+                    "key": "",
+                },
+            ]
+        )
+        expected = deepcopy(dict(self.conf))
+        expected["provider"][-2]["key"] = []
+
+        await runtime._repair_legacy_model_keys(self.conf)
+
+        self.assertEqual(dict(self.conf), expected)
+        self.assertEqual(self.conf.saved, [expected])
 
     async def test_foreign_source_id_collision_never_overwrites(self):
         self.conf["provider_sources"][0]["id"] = "cursor_cli"

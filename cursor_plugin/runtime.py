@@ -27,6 +27,7 @@ _validation_task = None
 _retry_validation_after = 0.0
 _validation_stopped = False
 _STARTUP_BACKOFF = (0.5, 2.0)
+_STARTUP_VALIDATION_BUDGET = 30
 _RECOVERY_COOLDOWN = 15.0
 _TRANSIENT_VALIDATION_ERRORS = {
     "runner_in_use",
@@ -180,27 +181,34 @@ def _check_startup():
         raise _startup_error()
 
 
-async def _run_validation(backoff):
+async def _run_validation(backoff, budget=None):
     global _validation_task, _startup_failure, _retry_validation_after
     try:
-        for attempt, delay in enumerate((0.0, *backoff), 1):
-            if delay:
-                await asyncio.sleep(delay)
-            try:
-                await validate_configured_model()
-            except CursorError as exc:
-                error = exc
-            except asyncio.TimeoutError:
-                error = CursorError("startup_timeout")
-            else:
-                _startup_failure = None
-                _retry_validation_after = 0.0
-                return None
-            code = error.code
-            logger.warning("cursor_model_validation code=%s attempt=%d", code, attempt)
-            if code not in _TRANSIENT_VALIDATION_ERRORS:
-                break
-        record_startup_failure(code, error=error)
+        try:
+            # AstrBot awaits plugin initialization before its providers and
+            # dashboard start. Chat queue settings must not extend that wait.
+            async with asyncio.timeout(budget):
+                for attempt, delay in enumerate((0.0, *backoff), 1):
+                    if delay:
+                        await asyncio.sleep(delay)
+                    try:
+                        await validate_configured_model()
+                    except CursorError as exc:
+                        error = exc
+                    except TimeoutError:
+                        error = CursorError("startup_timeout")
+                    else:
+                        _startup_failure = None
+                        _retry_validation_after = 0.0
+                        return None
+                    logger.warning(
+                        "cursor_model_validation code=%s attempt=%d", error.code, attempt
+                    )
+                    if error.code not in _TRANSIENT_VALIDATION_ERRORS:
+                        break
+        except TimeoutError:
+            error = CursorError("startup_timeout")
+        record_startup_failure(error.code, error=error)
         _retry_validation_after = time.monotonic() + _RECOVERY_COOLDOWN
         return error.with_traceback(None)
     finally:
@@ -221,7 +229,11 @@ async def ensure_model_validated(*, startup=False):
                 raise _startup_error()
         elif not startup and _available_models is not None:
             return
-        _validation_task = asyncio.create_task(_run_validation(_STARTUP_BACKOFF if startup else ()))
+        _validation_task = asyncio.create_task(
+            _run_validation(
+                _STARTUP_BACKOFF if startup else (), _STARTUP_VALIDATION_BUDGET if startup else None
+            )
+        )
     try:
         error = await asyncio.shield(_validation_task)
     except asyncio.CancelledError:
@@ -464,7 +476,10 @@ async def _commit_configuration(config, updates):
 
 def _is_cursor_model(model, source_ids):
     sid = model.get("provider_source_id")
-    return sid in source_ids or (not sid and model.get("type") == PROVIDER_TYPE)
+    if sid in source_ids:
+        # AstrBot merges the source first and lets explicit model fields override it.
+        return model.get("type", PROVIDER_TYPE) == PROVIDER_TYPE
+    return not sid and model.get("type") == PROVIDER_TYPE
 
 
 async def _repair_legacy_model_keys(config):
@@ -501,24 +516,31 @@ async def ensure_default_source_and_model(config):
     def owned(model):
         return _is_cursor_model(model, source_ids)
 
-    for item in models:
-        if owned(item):
-            item.update(key=[], api_base="", modalities=["text"])
+    owned_models = [item for item in models if owned(item)]
     model_id = settings()["model"]
-    target = None
+    target = occupied = None
     if not model_id:
         logger.warning(
             "Cursor model_id 为空或设置为 auto/default，未创建原生模型；"
             "请填写明确的套餐内模型 ID 后重载插件。不会自动选模型。"
         )
     else:
-        target = next((m for m in models if owned(m) and m.get("id") == model_id), None)
-        target = target or next(
-            (m for m in models if owned(m) and m.get("model") == model_id), None
-        )
+        occupied = next((item for item in models if item.get("id") == model_id), None)
+        stale = None
+        if occupied is not None and owned(occupied):
+            try:
+                if resolve_model(occupied.get("model"), _available_models) == model_id:
+                    target = occupied
+            except ModelResolutionError as exc:
+                # A removed model can be repaired. A still-valid or ambiguous
+                # binding may have existing default or fallback references.
+                if exc.code in {"model", "model_unavailable"}:
+                    stale = occupied
         if target is None:
-            for item in models:
-                if not owned(item):
+            target = next((item for item in owned_models if item.get("model") == model_id), None)
+        if target is None:
+            for item in owned_models:
+                if item is occupied:
                     continue
                 try:
                     matched = resolve_model(item.get("model"), _available_models) == model_id
@@ -527,11 +549,18 @@ async def ensure_default_source_and_model(config):
                 if matched:
                     target = item
                     break
-        if target is None and any(m.get("id") == model_id for m in models):
-            logger.warning(
-                "Cursor 原生模型 ID 已被其他提供商占用，未创建或覆盖模型；"
-                "请先处理 ID 冲突。不会自动改名或选模型。"
-            )
+        if target is None:
+            target = stale
+        if target is None and occupied is not None:
+            if owned(occupied):
+                logger.warning(
+                    "Cursor 原生模型 ID 已绑定其他模型或存在歧义，保留已有绑定。请先处理 ID 冲突。"
+                )
+            else:
+                logger.warning(
+                    "Cursor 原生模型 ID 已被其他提供商占用，未创建或覆盖模型；"
+                    "请先处理 ID 冲突。不会自动改名或选模型。"
+                )
         else:
             if target is None:
                 target = {"id": model_id, "enable": source.get("enable", True)}
@@ -551,24 +580,29 @@ async def ensure_default_source_and_model(config):
                 modalities=["text", "image"],
             )
             target.setdefault("enable", True)
+    for item in owned_models:
+        if item is not target and item is not occupied:
+            item.update(key=[], api_base="", modalities=["text"])
     await _commit_configuration(config, {"provider_sources": sources, "provider": models})
     return target["id"] if target else None
 
 
-async def initialize(context):
+async def initialize(context, *, stop_existing=False):
     """Ensure native config, then refresh instances with the OAuth plugin's lifecycle."""
     global _startup_failure, _validation_stopped
     _startup_failure = None
     _validation_stopped = False
     config = context.astrbot_config_mgr.default_conf
+    # Restore the system schema before any Runner shutdown or network validation.
     try:
+        await _repair_legacy_model_keys(config)
+    except CursorError as exc:
+        logger.warning("cursor_model_key_repair code=%s", exc.code)
+    try:
+        if stop_existing:
+            await stop_providers(context)
         await ensure_model_validated(startup=True)
     except CursorError:
-        # The system config must remain saveable even while Cursor is unavailable.
-        try:
-            await _repair_legacy_model_keys(config)
-        except CursorError as exc:
-            logger.warning("cursor_model_key_repair code=%s", exc.code)
         # A retained, already closed adapter still points at the retired Python module.
         # Rebind it to this runtime so its next request can use the recovery gate.
         await _reload_host_models(context, None, stopped_only=True)

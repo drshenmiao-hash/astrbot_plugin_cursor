@@ -13,6 +13,8 @@ from unittest.mock import patch
 from cursor_plugin import runtime
 from cursor_plugin.engine import Engine
 from cursor_plugin.errors import CursorError
+from cursor_plugin.launcher import ProcessOwner
+from cursor_plugin.settings import settings_from
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -255,3 +257,54 @@ raise SystemExit(0 if mode == "missing_ack" and code == 42 else code)
             )
         self.assertEqual([exc.code for exc in results], ["runner_in_use"] * 4)
         self.assertEqual(always_busy.await_count, 3)
+
+
+class LocalCloseCancellation(unittest.IsolatedAsyncioTestCase):
+    async def test_repeated_cancellation_keeps_child_and_lock_owned_until_exit(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        lock_path = root / "login.lock"
+        owner = ProcessOwner(settings_from({"transport": "local"}))
+        owner.kind = "local"
+        owner.lock = lock_path.open("a+b")
+        fcntl.flock(owner.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        owner.scratch = tempfile.TemporaryDirectory()
+        scratch = Path(owner.scratch.name)
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-c",
+            'import sys, time; sys.stdin.buffer.read(); print("closing", flush=True); time.sleep(60)',
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            start_new_session=True,
+        )
+        owner.process = proc
+        first = asyncio.create_task(owner.close())
+        second = None
+        try:
+            self.assertEqual(await asyncio.wait_for(proc.stdout.readline(), 2), b"closing\n")
+            for _ in range(2):
+                first.cancel()
+                await asyncio.sleep(0)
+            second = asyncio.create_task(owner.close())
+            await asyncio.sleep(0)
+            self.assertFalse(first.done())
+            self.assertFalse(second.done())
+            self.assertTrue(scratch.is_dir())
+            with lock_path.open("a+b") as contender:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            proc.terminate()
+            with self.assertRaises(asyncio.CancelledError):
+                await first
+            await second
+            self.assertIsNotNone(proc.returncode)
+            self.assertFalse(scratch.exists())
+            with lock_path.open("a+b") as contender:
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            if proc.returncode is None:
+                proc.kill()
+            await proc.wait()
+            await asyncio.gather(first, *([second] if second else []), return_exceptions=True)
+            await owner.close()

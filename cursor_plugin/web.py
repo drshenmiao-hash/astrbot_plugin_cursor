@@ -61,6 +61,8 @@ class UsagePage:
         if not self.active:
             return error("Cursor 插件当前已停止。", 503)
         body = await request.json(default=None)
+        if not self.active:
+            return error("Cursor 插件当前已停止。", 503)
         if isinstance(body, dict) and "action" in body:
             admin = self._context.get_config().get("dashboard", {}).get("username")
             if username != admin:

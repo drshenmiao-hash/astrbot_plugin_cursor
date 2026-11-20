@@ -6,11 +6,9 @@ import re
 
 from .system_clock import current_clock_fields, raw_append_suffix, semantic_systems
 
-_REASONING_BLOCK = re.compile(r"<(think|thinking)>(.*?)</\1>", re.DOTALL)
+_REASONING_OPENING = re.compile(r"<(think|thinking)>")
 _TRAILING_REASONING_CLOSE = re.compile(r"</(?:think|thinking)>\s*$")
-_ASTRNA_REPLY_MARKER = re.compile(
-    r"<(astrna_(?:reply_target|quoted_sender|quoted_reply_target))>.*?</\1>", re.DOTALL
-)
+_ASTRNA_REPLY_OPENING = re.compile(r"<(astrna_(?:reply_target|quoted_sender|quoted_reply_target))>")
 _MACHINE_CHUNK_TAIL = re.compile(
     r"(?:error[ \t]*:[ \t]*)*retriableerror[ \t]*:[ \t]*"
     r"(?:\[unavailable\][ \t]*)?(?:connection[ \t]+stalled|ping[ \t]+timed[ \t]+out)"
@@ -73,18 +71,43 @@ def compare_history_hashes(old_hashes, new_hashes, *, tail_count=2):
     }
 
 
+def _strip_complete_blocks(text, openings):
+    """Remove each complete block through its first matching closing tag."""
+    parts = []
+    cursor = 0
+    unclosed = set()
+    for opening in openings.finditer(text):
+        tag = opening[1]
+        if opening.start() < cursor or tag in unclosed:
+            continue
+        closing = f"</{tag}>"
+        position = text.find(closing, opening.end())
+        if position < 0:
+            # Each tag only searches to the end once.
+            unclosed.add(tag)
+            continue
+        parts.append(text[cursor : opening.start()])
+        cursor = position + len(closing)
+    if not parts:
+        return text
+    parts.append(text[cursor:])
+    return "".join(parts)
+
+
 def assistant_match_text(text):
     """Mirror AstrBot's reasoning-tag cleanup, exclusively for history hashes.
 
     Match complete reasoning blocks, a trailing reasoning close, and the
     internal reply markers removed by AstrNa when it saves conversation history.
     """
-    text = _TRAILING_REASONING_CLOSE.sub("", _REASONING_BLOCK.sub("", text)).strip()
-    text, removed = _ASTRNA_REPLY_MARKER.subn("", text)
-    if removed:
-        text = re.sub(r"[ \t]+\n|\n[ \t]+", "\n", text)
-        text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    text = _TRAILING_REASONING_CLOSE.sub(
+        "", _strip_complete_blocks(text, _REASONING_OPENING)
+    ).strip()
+    visible = _strip_complete_blocks(text, _ASTRNA_REPLY_OPENING)
+    if visible != text:
+        visible = re.sub(r"(?<![ \t])[ \t]+\n|\n[ \t]+", "\n", visible)
+        visible = re.sub(r"\n{3,}", "\n\n", visible)
+    return visible.strip()
 
 
 def history_state(history):

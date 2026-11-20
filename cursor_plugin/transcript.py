@@ -61,7 +61,7 @@ def text_content(content, *, read_image=None, history_parts=None):
     return "\n".join(parts)
 
 
-def merge_extra_parts(content, extra_parts):
+def merge_extra_parts(content, extra_parts, *, assembled_context=False):
     """The AstrBot runner passes its assembled final user message and its extra parts."""
     if not extra_parts:
         return content
@@ -81,7 +81,10 @@ def merge_extra_parts(content, extra_parts):
             None,
         )
         if matching is None:
-            parts.append(part)
+            # The runner has already captured these references as data URIs, or
+            # dropped unreadable ones. Do not reopen the original image refs.
+            if not assembled_context or part.get("type") not in {"image", "image_url"}:
+                parts.append(part)
         else:
             unmatched.remove(matching)
             if part.get("_no_save") is True:
@@ -98,6 +101,7 @@ def normalize_messages(
     max_bytes=MAX_CONTEXT,
     image_input=None,
     image_urls=None,
+    assembled_context=False,
 ):
     def user_entry(content, *, current, refs=()):
         images = []
@@ -154,7 +158,9 @@ def normalize_messages(
         if role == "user":
             content = message.get("content")
             if index == current:
-                content = merge_extra_parts(content, extra_parts)
+                content = merge_extra_parts(
+                    content, extra_parts, assembled_context=assembled_context
+                )
             messages.append(user_entry(content, current=index == current))
         else:
             messages.append({"role": role, "content": text_content(message.get("content"))})

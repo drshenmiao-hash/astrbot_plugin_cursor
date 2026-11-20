@@ -7,6 +7,25 @@ import signal
 from .errors import CursorError
 
 
+async def wait_for_cleanup(task):
+    """Let a bounded cleanup complete even when several callers cancel."""
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled():
+                raise
+            cancelled = True
+            continue
+        except Exception:
+            if not cancelled:
+                raise
+        if cancelled:
+            raise asyncio.CancelledError
+        return
+
+
 async def run_process(argv, payload, *, cwd, env, timeout, output_limit):
     try:
         proc = await asyncio.create_subprocess_exec(

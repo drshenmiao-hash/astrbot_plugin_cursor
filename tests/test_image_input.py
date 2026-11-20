@@ -179,6 +179,47 @@ class ImageInputTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(row["wire_bytes"] < 1024 for row in finished[1:4]))
         print("image/text regression wire_bytes:", [row["wire_bytes"] for row in finished])
 
+    async def test_host_prepared_image_extras_are_not_sent_twice(self):
+        from astrbot.core.agent.message import ImageURLPart, Message
+        from astrbot.core.provider.entities import ProviderRequest
+        from astrbot.core.provider.modalities import sanitize_contexts_by_modalities
+
+        provider = self.provider()
+        third = self.root / "third.png"
+        make_card(third)
+        with self.subTest("tool loop with three assembled images"):
+            extras = [
+                ImageURLPart(image_url=ImageURLPart.ImageURL(url=str(path)))
+                for path in (self.first, self.second, third)
+            ]
+            request = ProviderRequest(prompt="Three images", extra_user_content_parts=extras)
+            current = Message.model_validate(await request.assemble_context())
+            contexts, _ = sanitize_contexts_by_modalities([current], ["text", "image"])
+            # The original path may already have been removed by AstrBot.
+            third.unlink()
+            self.assertEqual(
+                (
+                    await provider.text_chat(
+                        contexts=contexts,
+                        extra_user_content_parts=extras,
+                        abort_signal=asyncio.Event(),
+                    )
+                ).completion_text,
+                "OK",
+            )
+            self.assertEqual(len(self.peer.prompts[-1]["prompt"]) - 1, 3)
+        with self.subTest("direct call accepts a genuinely unsent image extra"):
+            self.assertEqual(
+                (
+                    await provider.text_chat(
+                        contexts=[{"role": "user", "content": "One image"}],
+                        extra_user_content_parts=extras[:1],
+                    )
+                ).completion_text,
+                "OK",
+            )
+            self.assertEqual(len(self.peer.prompts[-1]["prompt"]) - 1, 1)
+
     async def test_reset_preserves_history_text_without_reading_or_counting_old_images(self):
         provider = self.provider()
         history = []

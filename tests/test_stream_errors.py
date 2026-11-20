@@ -181,9 +181,11 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
         self.engine.client = peer
         return peer
 
-    async def request(self):
+    async def request(self, *, request_max_retries=1):
         return await self.engine.submit(
-            [{"role": "user", "content": "PRIVATE_USER_SENTINEL"}], "group"
+            [{"role": "user", "content": "PRIVATE_USER_SENTINEL"}],
+            "group",
+            request_max_retries=request_max_retries,
         )
 
     def finished(self):
@@ -207,7 +209,7 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_retry_returns_only_normal_reply_and_uses_fresh_session(self):
         peer = self.peer([STALL, "正常回复"])
         with self.assertLogs("astrbot", level="INFO") as logs:
-            reply = await retry_stream_errors(self.request)
+            reply = await self.request(request_max_retries=None)
         self.assertEqual(reply, "正常回复")
         self.assertEqual(peer.prompt_count, 2)
         self.assertEqual(peer.session_count, 2)
@@ -218,13 +220,58 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn(STALL, joined)
         self.assertNotIn("PRIVATE_USER_SENTINEL", joined)
 
+    async def test_later_turn_cannot_overtake_an_earlier_retry_in_the_same_session(self):
+        peer = self.peer([PING, "earlier answer", "later answer"])
+        self.engine.queue.reorder_window = 0
+        prompt = peer.prompt
+        started = asyncio.Event()
+        finish_first_attempt = asyncio.Event()
+
+        async def block_first_attempt(session_id, text, **kwargs):
+            if not started.is_set():
+                started.set()
+                await finish_first_attempt.wait()
+            return await prompt(session_id, text, **kwargs)
+
+        async def send(content, sequence):
+            return await self.engine.submit(
+                [{"role": "user", "content": content}],
+                "group",
+                sequence=sequence,
+                request_max_retries=None,
+            )
+
+        with patch.object(peer, "prompt", side_effect=block_first_attempt):
+            first = asyncio.create_task(send("earlier question", 1))
+            tasks = [first]
+            try:
+                async with asyncio.timeout(3):
+                    await started.wait()
+                    tasks.append(asyncio.create_task(send("later question", 2)))
+                    async with self.engine.queue.condition:
+                        await self.engine.queue.condition.wait_for(self.engine.queue.qsize)
+                    finish_first_attempt.set()
+                    replies = await asyncio.gather(*tasks)
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+        self.assertEqual(replies, ["earlier answer", "later answer"])
+        records = self.finished()
+        self.assertEqual([r["sequence"] for r in records], [1, 1, 2])
+        self.assertEqual([r["code"] for r in records], ["ping_timeout", "ok", "ok"])
+        self.assertEqual(len({r["request_id"] for r in records}), 3)
+        self.assertEqual(self.engine.sessions["group"]["last_reply"], "later answer")
+
     async def test_exhausted_retry_propagates_safe_business_error_for_host_fallback(self):
         peer = self.peer([STALL, PING])
         with (
             self.assertLogs("astrbot", level="INFO") as logs,
             self.assertRaises(CursorStreamError) as caught,
         ):
-            await retry_stream_errors(self.request)
+            await self.request(request_max_retries=None)
         self.assertEqual(peer.prompt_count, 2)
         self.assertEqual(caught.exception.code, "ping_timeout")
         self.assertNotIn("RetriableError", str(caught.exception))
@@ -239,14 +286,14 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
     async def test_one_total_attempt_means_no_retry(self):
         peer = self.peer([STALL, "不应调用"])
         with self.assertLogs("astrbot", level="WARNING"), self.assertRaises(CursorStreamError):
-            await retry_stream_errors(self.request, request_max_retries=1)
+            await self.request(request_max_retries=1)
         self.assertEqual(peer.prompt_count, 1)
         self.assertEqual(self.finished()[0]["code"], "connection_stalled")
 
     async def test_large_retry_setting_is_capped_to_one_retry(self):
         peer = self.peer([PING, PING, "不应调用"])
         with self.assertLogs("astrbot", level="WARNING"), self.assertRaises(CursorStreamError):
-            await retry_stream_errors(self.request, request_max_retries=999)
+            await self.request(request_max_retries=999)
         self.assertEqual(peer.prompt_count, 2)
         self.assertTrue(all(e["code"] == "ping_timeout" for e in self.finished()))
 
@@ -256,7 +303,7 @@ class StreamFailureTests(unittest.IsolatedAsyncioTestCase):
                 # Fresh scopes avoid intentionally replaying previous responses.
                 peer = self.peer([text])
                 self.engine.sessions.clear()
-                self.assertEqual(await retry_stream_errors(self.request), text)
+                self.assertEqual(await self.request(request_max_retries=None), text)
                 self.assertEqual(peer.prompt_count, 1)
                 self.assertEqual(self.finished()[-1]["code"], "ok")
 

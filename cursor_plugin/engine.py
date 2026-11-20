@@ -6,11 +6,12 @@ import uuid
 from dataclasses import dataclass, field
 
 from .acp import ACPClient
-from .errors import CursorError, ImageLimitError
+from .errors import CursorError, ImageLimitError, retry_stream_errors
 from .images import prompt_images
 from .launcher import ProcessOwner, ssh_error_code
 from .logic import history_state, reconcile_history
 from .metrics import record
+from .process import wait_for_cleanup
 from .protocol import encode
 from .queueing import RequestQueue
 from .request_status import failure_stage, safe_transport
@@ -38,6 +39,7 @@ class Job:
     accounted: bool = False
     sequence: int | None = None
     stats_session: str | None = None
+    request_max_retries: int | None = 1
     model_id: str | None = None
     transport: str | None = None
     stage: str = "queue"
@@ -62,6 +64,7 @@ class Engine:
         self.active = 0
         self.session_slots = 0
         self.closed = False
+        self._close_task = None
         self._condition = asyncio.Condition()
         self._start_lock = asyncio.Lock()
         self._jobs = {}
@@ -79,7 +82,15 @@ class Engine:
                 ]
 
     async def submit(
-        self, messages, scope, *, on_queued=None, sequence=None, stats_session=None, images=None
+        self,
+        messages,
+        scope,
+        *,
+        on_queued=None,
+        sequence=None,
+        stats_session=None,
+        images=None,
+        request_max_retries=1,
     ):
         await self._start_workers()
         now = time.monotonic()
@@ -98,6 +109,7 @@ class Engine:
         job.sequence = sequence if type(sequence) is int else None
         job.stats_session = stats_session
         job.images = images
+        job.request_max_retries = request_max_retries
         self._jobs[job.request_id] = job
 
         async def queue_notice():
@@ -182,25 +194,23 @@ class Engine:
                 if isinstance(exc, TimeoutError)
                 else "cli_failed"
             )
-            if client is not None and isinstance(exc, CursorError) and exc.code == "process_exited":
-                try:
-                    await asyncio.wait_for(asyncio.shield(client._stderr_task), 1)
-                except asyncio.TimeoutError:
-                    pass
-                if owner.kind == "ssh" and client.startup_stage == "runner":
-                    code = ssh_error_code(bytes(client.stderr_sample))
-                elif b"bwrap" in client.stderr_sample:
-                    code = "sandbox_unavailable"
-            stage = failure_stage(code, client.startup_stage if client is not None else "runner")
             try:
-                if client is not None:
-                    await client.close()
+                if (
+                    client is not None
+                    and isinstance(exc, CursorError)
+                    and exc.code == "process_exited"
+                ):
+                    try:
+                        await asyncio.wait_for(asyncio.shield(client._stderr_task), 1)
+                    except asyncio.TimeoutError:
+                        pass
+                    if owner.kind == "ssh" and client.startup_stage == "runner":
+                        code = ssh_error_code(bytes(client.stderr_sample))
+                    elif b"bwrap" in client.stderr_sample:
+                        code = "sandbox_unavailable"
             finally:
-                try:
-                    await owner.close()
-                except CursorError as cleanup:
-                    cleanup.stage, cleanup.transport = "runner", safe_transport(owner.kind)
-                    raise
+                await self._close_transport(client, owner)
+            stage = failure_stage(code, client.startup_stage if client is not None else "runner")
             if isinstance(exc, Exception):
                 record("process_start_failed", transport=owner.kind, code=code, stage=stage)
                 error = CursorError(code)
@@ -209,15 +219,29 @@ class Engine:
                 raise error from None
             raise
 
+    @staticmethod
+    async def _close_transport(client, owner):
+        async def close():
+            try:
+                if client is not None:
+                    await client.close()
+            finally:
+                if owner is not None:
+                    try:
+                        await owner.close()
+                    except CursorError as cleanup:
+                        cleanup.stage, cleanup.transport = "runner", safe_transport(owner.kind)
+                        raise
+
+        if client is not None or owner is not None:
+            await wait_for_cleanup(asyncio.create_task(close()))
+
     async def _reset_client(self, reason):
         client, owner = self.client, self.owner
         self.client, self.owner = None, None
         self.sessions.clear()
         self.session_slots = 0
-        if client is not None:
-            await client.close()
-        if owner is not None:
-            await owner.close()
+        await self._close_transport(client, owner)
         record("runtime_reset", reset_reason=reason)
 
     async def available_models(self, *, reuse_only=False):
@@ -310,9 +334,7 @@ class Engine:
         except (CursorError, asyncio.TimeoutError, OSError):
             # No acknowledgement: stop the transport/runtime rather than reusing
             # an unknown session. Other in-flight turns fail explicitly too.
-            await client.close()
-            if self.owner is not None:
-                await self.owner.close()
+            await self._close_transport(client, self.owner)
             record("cancel_unconfirmed", code="cancel_unconfirmed")
         finally:
             if not turn.done():
@@ -401,85 +423,115 @@ class Engine:
                 job.sent_image_blocks = len(image_blocks)
                 job.sent_image_base64_bytes = sum(len(block["data"]) for block in image_blocks)
 
+    async def _run_attempt(self, job):
+        leased = False
+        operation = cancellation = None
+        code = "ok"
+        try:
+            if job.cancel.is_set() or job.future.cancelled():
+                raise CursorError("cancelled")
+            cached, plan = self._reuse(job.messages, job.scope)
+            if not plan["has_new_user_input"]:
+                job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
+                job.process_reused = bool(self.client and not self.client.closed)
+                job.started.set()
+                return self._no_new_input(job, cached)
+            client = await asyncio.wait_for(
+                self._lease(job), max(0.001, job.deadline - time.monotonic())
+            )
+            leased = True
+            if job.cancel.is_set() or job.future.cancelled():
+                raise CursorError("cancelled")
+            job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
+            job.started.set()
+            operation = asyncio.create_task(self._execute(job, client))
+            cancellation = asyncio.create_task(job.cancel.wait())
+            done, _ = await asyncio.wait(
+                {operation, cancellation},
+                timeout=self.cfg["timeout_seconds"],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if operation in done:
+                return await operation
+            code = "cancelled" if job.cancel.is_set() else "timeout"
+            operation.cancel()
+            await asyncio.gather(operation, return_exceptions=True)
+            raise CursorError(code)
+        except asyncio.TimeoutError:
+            code = "queue_timeout"
+            raise CursorError(code) from None
+        except CursorError as exc:
+            code = exc.code
+            job.stage = exc.stage or job.stage
+            job.transport = exc.transport or job.transport
+            if isinstance(exc, ImageLimitError):
+                job.image_limit = exc.metadata
+            raise
+        except asyncio.CancelledError:
+            code = "closed"
+            if operation is not None:
+                operation.cancel()
+                await asyncio.gather(operation, return_exceptions=True)
+            raise
+        except Exception:
+            code = "cli_failed"
+            raise CursorError(code) from None
+        finally:
+            # Wake the caller even when startup failed before a prompt began.
+            job.started.set()
+            if cancellation is not None:
+                cancellation.cancel()
+                await asyncio.gather(cancellation, return_exceptions=True)
+            if leased:
+                await self._release()
+            self._account(job, code)
+
     async def _worker(self):
         while True:
             job = await self.queue.get()
-            leased = False
-            operation = cancellation = None
-            result = error = None
-            code = "ok"
-            try:
-                if job.cancel.is_set() or job.future.cancelled():
-                    code = "cancelled"
-                    continue
-                cached, plan = self._reuse(job.messages, job.scope)
-                if not plan["has_new_user_input"]:
-                    job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
-                    job.process_reused = bool(self.client and not self.client.closed)
-                    job.started.set()
-                    result = self._no_new_input(job, cached)
-                    continue
-                client = await asyncio.wait_for(
-                    self._lease(job), max(0.001, job.deadline - time.monotonic())
-                )
-                leased = True
-                if job.cancel.is_set() or job.future.cancelled():
-                    code = "cancelled"
-                    continue
-                job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
-                job.started.set()
-                operation = asyncio.create_task(self._execute(job, client))
-                cancellation = asyncio.create_task(job.cancel.wait())
-                done, _ = await asyncio.wait(
-                    {operation, cancellation},
-                    timeout=self.cfg["timeout_seconds"],
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if operation in done:
-                    result = await operation
+            current = None
+
+            async def attempt():
+                nonlocal current
+                if current is None:
+                    current = job
                 else:
-                    code = "cancelled" if job.cancel.is_set() else "timeout"
-                    operation.cancel()
-                    await asyncio.gather(operation, return_exceptions=True)
-                    raise CursorError(code)
-            except asyncio.TimeoutError:
-                code = "queue_timeout"
-                error = CursorError(code)
+                    # Keep the reservation and the original caller. Only per-attempt
+                    # accounting and the deadline for acquiring a runtime start afresh.
+                    now = time.monotonic()
+                    current = Job(
+                        job.messages,
+                        job.scope,
+                        uuid.uuid4().hex,
+                        job.future,
+                        now,
+                        now + self.cfg["queue_timeout_seconds"],
+                        job.input_bytes,
+                        started=job.started,
+                        cancel=job.cancel,
+                        sequence=job.sequence,
+                        stats_session=job.stats_session,
+                        images=job.images,
+                    )
+                return await self._run_attempt(current)
+
+            try:
+                result = await retry_stream_errors(
+                    attempt, request_max_retries=job.request_max_retries
+                )
             except CursorError as exc:
-                code = exc.code
-                error = exc
-                job.stage = exc.stage or job.stage
-                job.transport = exc.transport or job.transport
-                if isinstance(exc, ImageLimitError):
-                    job.image_limit = exc.metadata
-            except asyncio.CancelledError:
-                code = "closed"
-                if operation is not None:
-                    operation.cancel()
-                    await asyncio.gather(operation, return_exceptions=True)
-                error = CursorError(code)
-                raise
-            except Exception:
-                code = "cli_failed"
-                error = CursorError(code)
-            finally:
-                # Wake the caller even when startup failed before a prompt began.
-                job.started.set()
-                if cancellation is not None:
-                    cancellation.cancel()
-                    await asyncio.gather(cancellation, return_exceptions=True)
-                if leased:
-                    await self._release()
-                await self.queue.task_done(job)
-                self._account(job, code)
                 if not job.future.done():
-                    if error is not None:
-                        # The caller must not receive a traceback into the still-running worker.
-                        job.future.set_exception(error.with_traceback(None))
-                    elif result is not None:
-                        job.future.set_result(result)
-                    else:
-                        job.future.set_exception(CursorError(code if code != "ok" else "cancelled"))
+                    job.future.set_exception(exc.with_traceback(None))
+            except asyncio.CancelledError:
+                if not job.future.done():
+                    job.future.set_exception(CursorError("closed"))
+                raise
+            else:
+                if not job.future.done():
+                    job.future.set_result(result)
+            finally:
+                # Another turn in this conversation may start only after all retries.
+                await self.queue.task_done(job)
 
     def _account(self, job, code):
         if job.accounted:
@@ -529,9 +581,12 @@ class Engine:
         }
 
     async def close(self):
-        if self.closed:
-            return
-        self.closed = True
+        if self._close_task is None:
+            self.closed = True
+            self._close_task = asyncio.create_task(self._shutdown())
+        await wait_for_cleanup(self._close_task)
+
+    async def _shutdown(self):
         jobs = list(self._jobs.values())
         for job in jobs:
             job.cancel.set()

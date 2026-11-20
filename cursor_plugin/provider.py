@@ -22,7 +22,6 @@ from .errors import (
     ImageLimitError,
     ImageUnsupportedError,
     UnsupportedFeatureError,
-    retry_stream_errors,
 )
 from .images import ImageInput
 from .metrics import record
@@ -135,6 +134,12 @@ class CursorCLIProvider(Provider):
                 conversation_id=conversation_id,
                 request_sequence=kwargs.get("request_sequence"),
                 request_max_retries=request_max_retries,
+                # AstrBot's ToolLoopAgentRunner supplies the serialized user
+                # context and its raw extra parts together with an abort event.
+                assembled_context=isinstance(kwargs.get("abort_signal"), asyncio.Event)
+                and bool(contexts)
+                and prompt is None
+                and not image_urls,
                 event=event,
             )
         except asyncio.CancelledError:
@@ -193,6 +198,7 @@ class CursorCLIProvider(Provider):
         conversation_id,
         request_sequence,
         request_max_retries=None,
+        assembled_context=False,
         event=None,
     ):
         started = time.monotonic()
@@ -226,7 +232,11 @@ class CursorCLIProvider(Provider):
                 raise UnsupportedFeatureError("tool_calls")
             image_input = None
             arguments = (prompt, contexts, system_prompt, extra_user_content_parts)
-            options = {"max_bytes": self.settings["context_max_bytes"], "image_urls": image_urls}
+            options = {
+                "max_bytes": self.settings["context_max_bytes"],
+                "image_urls": image_urls,
+                "assembled_context": assembled_context,
+            }
             try:
                 messages = normalize_messages(*arguments, **options)
             except UnsupportedFeatureError as exc:
@@ -272,32 +282,28 @@ class CursorCLIProvider(Provider):
             if event is not None:
                 await event.send(MessageChain().message("呜呜等一下"))
 
-        async def attempt():
-            task = asyncio.create_task(
-                self.engine.submit(
-                    messages,
-                    scope,
-                    on_queued=on_queued,
-                    sequence=request_sequence,
-                    stats_session=stats_session,
-                    **(
-                        {"images": image_input.blocks} if image_input and image_input.blocks else {}
-                    ),
-                )
+        task = asyncio.create_task(
+            self.engine.submit(
+                messages,
+                scope,
+                on_queued=on_queued,
+                sequence=request_sequence,
+                stats_session=stats_session,
+                request_max_retries=request_max_retries,
+                **({"images": image_input.blocks} if image_input and image_input.blocks else {}),
             )
-            self._pending.add(task)
-            try:
-                return await task
-            except asyncio.CancelledError:
-                # Cancelling the provider's child during unload is a failed request.
-                # An actual cancellation of the caller must still propagate.
-                if self._closed and not asyncio.current_task().cancelling():
-                    raise CursorError("closed") from None
-                raise
-            finally:
-                self._pending.discard(task)
-
-        text = await retry_stream_errors(attempt, request_max_retries=request_max_retries)
+        )
+        self._pending.add(task)
+        try:
+            text = await task
+        except asyncio.CancelledError:
+            # Cancelling the provider's child during unload is a failed request.
+            # An actual cancellation of the caller must still propagate.
+            if self._closed and not asyncio.current_task().cancelling():
+                raise CursorError("closed") from None
+            raise
+        finally:
+            self._pending.discard(task)
         return LLMResponse(role="assistant", completion_text=text)
 
     async def text_chat_stream(self, *args, **kwargs):

@@ -139,11 +139,13 @@ class ACPClient:
         result = await self._open_session()
         return result["models"]["availableModels"]
 
-    async def new_session(self, model):
+    async def new_session(self, model, *, resolve_alias=False):
         result = await self._open_session()
         session_id = result["sessionId"]
         try:
-            model = resolve_model(model, result["models"]["availableModels"])
+            model = resolve_model(
+                model, result["models"]["availableModels"], resolve_alias=resolve_alias
+            )
         except ModelResolutionError as exc:
             # The standalone ACP checks run without AstrBot installed.
             try:

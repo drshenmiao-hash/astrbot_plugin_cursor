@@ -111,7 +111,10 @@ async def _probe(cfg, *, test=False):
             stage = "model"
             client = probe.client
             async with asyncio.timeout(min(_TEST_TIMEOUT, cfg["timeout_seconds"])):
-                session_id = await client.new_session(cfg["model"] or cfg["requested_model"])
+                model = cfg["model"]
+                session_id = await client.new_session(
+                    model or cfg["requested_model"], resolve_alias=not model
+                )
                 model_id = safe_model_id(client.session_models.get(session_id))
                 await client.prompt(session_id, "Reply with OK.", stats=turn)
     except CursorError as exc:

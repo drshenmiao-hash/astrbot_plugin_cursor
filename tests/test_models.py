@@ -119,7 +119,7 @@ class ACPModelTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_actual_set_config_option_uses_canonical_id(self):
         client = memory_acp(lambda: CATALOG)
-        self.assertEqual(await client.new_session("cursor-grok-4.6-high"), "memory-session")
+        self.assertEqual(await client.new_session("grok-4.6"), "memory-session")
         calls = client.call.await_args_list
         self.assertEqual(
             [c.args[0] for c in calls],
@@ -127,6 +127,25 @@ class ACPModelTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(calls[1].args[1]["value"], "grok-4.6")
         self.assertEqual(calls[2].args[1]["modeId"], "ask")
+
+    async def test_unavailable_validated_id_is_never_reinterpreted_as_an_alias(self):
+        for canonical, replacement in [
+            ("grok-4.6", {"modelId": "different-model", "displayName": "grok-4.6"}),
+            ("cursor-grok-4.6-high", {"modelId": "grok-4.6"}),
+        ]:
+            with self.subTest(canonical=canonical):
+                resolved = resolve_model(canonical, [{"modelId": canonical}])
+                client = memory_acp(lambda: [replacement])
+                with (
+                    self.assertLogs("astrbot", level="WARNING"),
+                    self.assertRaises(ModelResolutionError) as caught,
+                ):
+                    await client.new_session(resolved)
+                self.assertEqual(caught.exception.code, "model_unavailable")
+                self.assertEqual(client.session_models, {})
+                self.assertEqual(
+                    [call.args[0] for call in client.call.await_args_list], ["session/new"]
+                )
 
     async def test_missing_model_logs_ids_without_setting_another_model(self):
         client = memory_acp(lambda: CATALOG)
@@ -145,7 +164,7 @@ class ACPModelTests(unittest.IsolatedAsyncioTestCase):
             self.assertLogs("astrbot", level="WARNING"),
             self.assertRaises(ModelResolutionError) as caught,
         ):
-            await client.new_session("Grok 4.6")
+            await client.new_session("Grok 4.6", resolve_alias=True)
         self.assertEqual(caught.exception.code, "model_ambiguous")
         self.assertEqual(client.call.await_count, 1)
 
