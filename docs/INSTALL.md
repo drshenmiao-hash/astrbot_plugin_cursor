@@ -1,6 +1,6 @@
 # 安装与升级
 
-在 AstrBot 插件页用仓库 URL 安装 v0.4.3，或下载 main 源码 ZIP 上传。接口基线为 AstrBot 4.29.4。先在独立测试编排和数据卷中验证联通与真实计费。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
+在 AstrBot 插件页用仓库 URL 安装 v0.4.4，或下载 main 源码 ZIP 上传。接口基线为 AstrBot 4.29.4。先在独立测试编排和数据卷中验证联通与真实计费。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
 
 ```bash
 git clone --branch main https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor

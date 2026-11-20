@@ -2,9 +2,9 @@
 
 使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
 
-> v0.4.3 修复停用与初始化异常时的资源清理，并补齐图片校验依赖。
+> v0.4.4 新增 WebUI 连通性诊断，可查看最近请求失败在哪一步，也可手动检查连接或测试模型。
 
-默认分支 `main` 提供 `v0.4.3`。可在 AstrBot 插件页用仓库 URL 安装或更新，也可上传源码 ZIP。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
+默认分支 `main` 提供 `v0.4.4`。可在 AstrBot 插件页用仓库 URL 安装或更新，也可上传源码 ZIP。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
 
 ```text
 https://github.com/drshenmiao-hash/astrbot_plugin_cursor
@@ -12,7 +12,7 @@ https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 
 保存明确的 `model_id` 后重载插件，即会新增或更新 Cursor 来源和原生模型。原有默认模型和备用模型保持不变。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
 
-登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。需要查看账号 Token 时，可在同一页选取 Cursor 官方导出的用量 CSV，文件只在浏览器内读取。[用量说明](docs/LOCAL_USAGE.md)
+登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。需要查看账号 Token 时，可在同一页选取 Cursor 官方导出的用量 CSV，文件只在浏览器内读取。管理员还可查看最近一次实际请求、检查连接或测试模型。[用量和诊断说明](docs/LOCAL_USAGE.md)
 
 ## 功能
 

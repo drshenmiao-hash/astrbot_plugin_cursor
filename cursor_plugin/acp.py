@@ -108,7 +108,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.3"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.4"},
                 },
                 timeout=30,
             )
