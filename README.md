@@ -1,114 +1,30 @@
-# astrbot_plugin_cursor
+# Cursor CLI for AstrBot
 
-使用官方 Cursor CLI，为 AstrBot 提供原生聊天 Provider。人格与历史仍由 AstrBot 管理。
+在 AstrBot 中使用 Cursor CLI 作为聊天模型提供商，支持文本、图片输入和会话复用。人格和聊天历史由 AstrBot 管理。插件适用于 AstrBot 4.29.4 至 5.0 之前的版本。
 
-> v0.4.4 新增 WebUI 连通性诊断，可查看最近请求失败在哪一步，也可手动检查连接或测试模型。
+## 安装与配置
 
-默认分支 `main` 提供 `v0.4.4`。可在 AstrBot 插件页用仓库 URL 安装或更新，也可上传源码 ZIP。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
+1. **准备 Cursor CLI。** 在运行 CLI 的环境里用官方 CLI 登录 Cursor。本地模式要求 AstrBot 的运行环境中有 CLI 和可用的 `bubblewrap`。如果容器不支持本地隔离，可使用专用 SSH 运行器。按你的部署方式参照[安装指南](docs/INSTALL.md#选择运行方式)。
+2. **安装插件。** 在 AstrBot WebUI 的插件页搜索 `astrbot_plugin_cursor`（Cursor CLI）。如果你的市场源未收录，可在同一页面通过仓库 URL 安装：`https://github.com/drshenmiao-hash/astrbot_plugin_cursor`。
+3. **配置模型。** 在插件页打开 Cursor CLI 的配置，按部署方式填写 `transport` 和相应的 CLI 或 SSH 设置，再填写 `model_id`。在运行端用 CLI 的 `models` 命令查看候选模型。插件最终按 Cursor ACP 返回的模型 ID 校验，也接受可唯一匹配的显示名称。选一个账号可用的具体模型，避免填写 `auto` 或 `default`。[模型 ID 说明](docs/MODEL_IDS.md)
+4. **保存并重载插件。** 校验通过后，插件会在 AstrBot 中注册 Cursor 来源和对应模型。在目标聊天会话里选中这个模型，即可开始使用。
 
-```text
-https://github.com/drshenmiao-hash/astrbot_plugin_cursor
-```
+## 检查连接与用量
 
-保存明确的 `model_id` 后重载插件，即会新增或更新 Cursor 来源和原生模型。原有默认模型和备用模型保持不变。会话复用的实现和限制见 [补丁说明](docs/HISTORY_PATCH.md)。
+在 AstrBot WebUI 打开 **Cursor CLI → 用量与运行状态**。
 
-登录 AstrBot WebUI，在 **Cursor CLI → 用量与运行状态** 查看当前模型、连接配置、CLI、队列状态和近 7、30、90 天的用量。明细可按实际 ACP 模型、匿名会话或结果分组。管理员也可继续使用 `/cursor_usage`。需要查看账号 Token 时，可在同一页选取 Cursor 官方导出的用量 CSV，文件只在浏览器内读取。管理员还可查看最近一次实际请求、检查连接或测试模型。[用量和诊断说明](docs/LOCAL_USAGE.md)
+- **检查连接**查看 Runner、CLI、ACP 握手和认证各自的状态，无模型请求。
+- **测试模型**向当前配置的模型发一条真实请求，可能消耗 Cursor 额度。
+- **最近一次实际请求**显示正常聊天的最近结果及失败阶段。用量页还提供本地请求统计，可导入 Cursor 官方用量 CSV 查看账号 Token 汇总。[用量和诊断说明](docs/LOCAL_USAGE.md)
 
-## 功能
+## 更新
 
-- 使用官方 `agent acp` 常驻进程，通过 JSON-RPC 维护会话，固定 Ask 和明确模型 ID。
-- 对话历史连续时只发新增消息；system 独立比对，以差异增量更新现有会话。对话前缀变化、历史压缩或请求取消后重建会话。
-- 使用等待队列和并发上限；排队超过 3 秒可回复排队提示，达到时限明确报错。
-- 记录字节、耗时、排队和复用状态；不记录聊天正文、令牌或原始认证错误。
-- 优先在 AstrBot 所在环境本地隔离运行；可选 SSH 专用运行器。
+通过 AstrBot 插件市场安装的用户，可在插件页有新版提示时更新。若通过仓库 URL 安装，请参照[安装与升级](docs/INSTALL.md#升级与回滚)。正式版本及变更见 [GitHub Releases](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/releases)和[变更日志](CHANGELOG.md)。
 
-完整清单见 [CHANGELOG](CHANGELOG.md)，部署见 [安装指南](docs/INSTALL.md)。
+## 功能与限制
 
-## 配置
+- Cursor CLI 以 Ask 模式运行，使用插件配置的模型。图片能否使用取决于具体模型和 CLI 运行端。音频和工具调用暂不支持。[图片输入说明](docs/IMAGE_INPUT.md)
+- 插件复用连续对话的 Cursor 会话，以减少重复传输。上下文变化或进程重启时会按需重建会话，实际用量以 [Cursor 用量页](https://cursor.com/dashboard/usage)为准。[会话复用说明](docs/HISTORY_PATCH.md)
+- 插件注册模型后，由你在 AstrBot 里选择何时使用。现有默认模型和备用模型的设置会保留。[自动注册说明](docs/REGISTRATION.md)
 
-| 参数 | 默认值 | 作用 |
-| --- | --- | --- |
-| `model_id` | 空 | 明确的 ACP modelId、唯一展示名或支持的管理端 ID；以 ACP 列表为准，新建原生 `id` 和 `model` 均使用解析后的 modelId；空/auto/default 不建模型 |
-| `image_unsupported_message` | 当前 Cursor 运行端或所选模型不支持图片输入。 | 图片输入不受支持时的聊天提示，留空使用默认提示 |
-| `transport` | `auto` | 有本地 CLI 和 bubblewrap 时选 local，否则选 ssh；隔离失败不会裸跑 |
-| `cli_binary` | 自动查找 | 本地官方 `agent` / `cursor-agent` 绝对路径 |
-| `cursor_auth_path` | `~/.config/cursor/auth.json` | 本地专用浏览器登录文件 |
-| `bubblewrap_binary` | `/usr/bin/bwrap` | 本地文件隔离程序 |
-| `max_concurrency` | `2` | 同时执行上限 1–8，同一会话始终串行 |
-| `queue_capacity` | `64` | 等待队列容量；满时等待空位，而非立即丢弃 |
-| `queue_timeout_seconds` | `120` | 入队、同会话等待和启动等待的总预算 |
-| `timeout_seconds` | `120` | 开始执行后的超时；发送 ACP 取消，5 秒未确认则重置运行时 |
-| `context_max_bytes` | `262144` | 完整规范化上下文的 UTF-8 字节上限；超限报错，不截断 |
-| `output_max_bytes` | `2097152` | 回复字节上限 |
-| `max_sessions` | `128` | 达到会话数量上限后，待运行中的请求结束再轮换进程 |
-| `ssh_host` / `ssh_port` | `cursor-cli` / `2222` | 仅用于 ssh 路径 |
-| `identity_file` | `/run/cursor-client/id_ed25519` | 专用客户端私钥 |
-| `known_hosts_file` | `/run/cursor-client/known_hosts` | 固定主机公钥 |
-| `ssh_binary` | `/usr/bin/ssh` | OpenSSH 客户端 |
-
-插件安装/重载时自动确保 `cursor_cli` 来源存在，来源的 Key 和 API Base 留空，原生模型的 Key 保存为空列表。来源模板声明文本，当前已校验的原生模型接收文本和图片。图片由运行端及实际模型判断，遇到拒绝会明确报错。重复加载会更新或复用已有配置，不重复新增。只在你自行选择后使用 Cursor，插件不切换当前默认模型，也不改 OpenAI OAuth、DeepSeek 或备用模型设置。
-
-启动或重载时通过 ACP `session/new` 查询一次 `availableModels`，先精确匹配 `modelId`，再唯一匹配展示名或明确别名。`cursor-grok-4.6-high` 对应 `grok-4.6`，后者必须实际出现在 ACP 列表中；有歧义时报错。`cursor-admin models` 的管理端 ID 不作为最终判断依据，见 [模型 ID 解析规则](docs/MODEL_IDS.md)。
-
-已存在同一 Cursor 模型、但原生 `id` 是自定义别名时，沿用该条目，`model` 使用解析后的 modelId，不重命名或另建一份，以免破坏默认/备用引用。ID 被其他提供商占用时提示冲突，不覆盖配置。细节见 [自动注册说明](docs/REGISTRATION.md)。
-
-## 复用与并发的边界
-
-- 有稳定 `conversation_id` 或 `session_id` 才复用会话；没有稳定标识时，不跨请求猜测会话归属。
-- 前缀 hash 排除全部 `role=system`，完整比较其余对话；assistant 比对兼容首尾空白、完整 `<think>` / `<thinking>` 块被剥离和末尾闭合标签清理，不修改实际发送内容或返回的回复。
-- system 变化通过一条增量说明发送；追加内容仅发送后缀，替换或删除会明确说明。system 消失（包括次轮传入 `None`）会撤回先前 system 条目。
-- 比对时忽略可明确识别的时钟元数据行；纯时钟变化不产生 system replace/append。每轮正常增量请求仍以独立的最小当前时间字段携带最新时间，不重发整段人设；未知格式保留原文，见 [时钟规则](docs/SYSTEM_CLOCK.md)。
-- 重复上次请求，或已有回复的历史没有新 user 条目时，沿用该会话最近一次成功结果，不调用 CLI。没有可用缓存时安全返回空文本。仅有 system 变化时，差异保留到下次新 user 输入再发送。
-- 同会话待执行请求都带 `request_sequence` 时可按序号重排；没有序号时按到达顺序。队列仅有 25 ms 的聚合窗口，不能重排已经开始的请求。
-- Cursor ACP 的模型设置会影响共享运行时，因此此版本固定一个配置模型，不在并发请求间切换模型。
-- 常驻不是永不重启：连接退出、取消未确认、达到会话数上限和模型实例清理时会轮换。轮换后的第一次请求会重新发送完整历史。
-
-## 能力与费用
-
-当前适配器接收文本和图片。图片随正常请求发给所选模型，模型或运行端明确报不支持时返回 `image_unsupported`。音频和工具请求仍返回 `UnsupportedFeatureError`。
-
-图片传输的协议证据和隔离测试方法见 [Cursor ACP 图片输入验收](docs/IMAGE_INPUT.md)。
-
-`input_bytes` 是完整规范化历史，`sent_input_bytes` 是本次发送的文本，`wire_bytes` 是 ACP JSON 帧大小，不含 SSH/TLS 开销。它们都不是 token 或账单金额。会话复用减少重复传输和重复入库，但不能保证历史 token 不再计费或额度下降一半。
-
-缓存回复会记录 `reset_reason=cached_reply`，发送字节为 0。system 增量是提示词层面的更新，不能从 Cursor 既有上下文中物理删除旧指令。contexts 含 `tool_calls` 仍返回不支持错误；历史窗口裁剪仍会打断对话前缀。
-
-真实模型可用性、缓存和套餐扣费应在 [Cursor 用量页](https://cursor.com/dashboard/usage) 独立核对。
-
-## 检查命令
-
-```bash
-# 纯逻辑，无网络和子进程依赖
-python tests/check_logic.py
-
-# 历史复用回归，实际运行 Engine；ACP 对端为内存替身，无子进程或网络
-python -m unittest -v tests.test_history_reuse
-
-# 自动注册回归，使用配置保存/ProviderManager 测试替身
-python -m unittest -v tests.test_registration
-
-# 模型解析、自动注册和历史复用回归；使用模拟 ACP 列表，无网络或子进程
-python -m unittest tests.test_models tests.test_registration tests.test_history_reuse
-
-# 一份环境脚本，使用模拟 ACP 进程，不调用 Cursor
-python tests/check_environment.py --mock
-
-# 在临时 AstrBot 4.29.4 实例中验证重载、禁用和备用模型，使用模拟 ACP
-python -m tests.check_astrbot_lifecycle
-
-# 真实环境，会发起模型请求并可能计费
-python tests/check_environment.py --config /path/to/plugin-config.json --allow-model-requests
-
-# 仅诊断依赖，不发送模型提示词
-python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
-```
-
-机器人管理员可运行 `/cursor_doctor`。每项环境检查打印 PASS、FAIL 或 SKIP，并带 RAW 结果或异常堆栈；不会把认证报文或密钥打印出来。详细说明见 [测试指南](docs/ACCEPTANCE.md)。
-
-## 环境与来源
-
-接口基线为 AstrBot 4.29.4（Python 3.12+）。图片校验依赖 Pillow，已在 `requirements.txt` 声明。本地模式依赖 Linux bubblewrap 与可用的命名空间隔离，容器配方为 Linux amd64。无需安装 Cursor 桌面版，无新增 Python 依赖。
-
-Provider 注册和重载改编自 [astrbot_plugin_openai_oauth](https://github.com/wcqqq1214/astrbot_plugin_openai_oauth)，来源见 [NOTICE](NOTICE)。使用官方 [Cursor ACP](https://cursor.com/docs/cli/acp) 协议；不修改 AstrBot 核心，不搭建 OpenAI 兼容 HTTP 桥接。
-
-[AGPL-3.0](LICENSE)。`/cursor_source` 提供本版本源码地址。
+部署细节见[安装指南](docs/INSTALL.md)，开发与验证见[验收指南](docs/ACCEPTANCE.md)。本项目采用 [AGPL-3.0](LICENSE)，上游实现与署名见 [NOTICE](NOTICE)。
