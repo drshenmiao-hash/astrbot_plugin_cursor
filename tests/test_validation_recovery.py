@@ -114,8 +114,11 @@ class ValidationRecovery(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaisesRegex(CursorError, code):
                     await runtime.ensure_model_validated(startup=True)
                 runtime._retry_validation_after = 0
-                with self.assertRaisesRegex(CursorError, code):
-                    await runtime.available_model_ids()
+                if code == "model_unavailable":
+                    self.assertEqual(await runtime.available_model_ids(), ["other"])
+                else:
+                    with self.assertRaisesRegex(CursorError, code):
+                        await runtime.available_model_ids()
                 self.fetch.assert_awaited_once()
 
     async def test_recovery_failure_restarts_cooldown(self):

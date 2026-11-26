@@ -30,13 +30,23 @@ def cli_env(home):
     }
 
 
-def read_browser_credentials(path):
+def browser_tokens(value):
+    result = {"accessToken": value["accessToken"]}
+    if isinstance(value.get("refreshToken"), str):
+        result["refreshToken"] = value["refreshToken"]
+    return result
+
+
+def read_browser_credentials(path, *, private=False, preserve_metadata=False):
     # Never accept API keys or unrelated provider credentials as a substitute.
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as source:
-            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode):
                 raise CursorError("config")
+            if private and (info.st_uid != os.geteuid() or info.st_mode & 0o077):
+                raise CursorError("auth_file_permissions")
             raw = source.read(65537)
         if len(raw) > 65536:
             raise CursorError("config")
@@ -47,10 +57,7 @@ def read_browser_credentials(path):
             raise CursorError("config")
         if not isinstance(value.get("accessToken"), str) or not value["accessToken"]:
             raise CursorError("not_logged_in")
-        result = {"accessToken": value["accessToken"]}
-        if isinstance(value.get("refreshToken"), str):
-            result["refreshToken"] = value["refreshToken"]
-        return result
+        return value if preserve_metadata else browser_tokens(value)
     except FileNotFoundError:
         raise CursorError("not_logged_in") from None
     except (OSError, ValueError, UnicodeError, RecursionError):

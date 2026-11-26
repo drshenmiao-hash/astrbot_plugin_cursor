@@ -1,7 +1,7 @@
 const byId = (id) => document.getElementById(id);
 const number = new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 1 });
 const dimensions = { model: "模型", session: "匿名会话", code: "结果" };
-const transports = { auto: "自动检测", local: "本地隔离", ssh: "SSH 运行器" };
+const transports = { auto: "自动检测", local: "本地运行（bubblewrap 隔离）", local_direct: "本地运行（无系统隔离）", ssh: "SSH 专用 Runner" };
 const codes = {
   ok: "成功",
   cancelled: "请求取消",
@@ -139,8 +139,16 @@ function renderTrend(days) {
   table("daily", days.map((day) => [day.label, count(day.requests), count(day.failed)]), 3);
 }
 
-const diagnosticLabels = { passed: "通过", failed: "失败", skipped: "跳过", unknown: "无法确认" };
-const diagnosticSteps = { runner: "Runner", cli: "Cursor CLI", acp: "ACP 握手", auth: "认证", cleanup: "诊断资源清理" };
+const diagnosticLabels = { passed: "通过", failed: "失败", skipped: "跳过", unknown: "待确认", disabled: "未启用" };
+const diagnosticSteps = {
+  environment: "环境检查", cli: "Cursor CLI", bubblewrap: "bubblewrap", runner: "运行端",
+  ssh: "SSH 连接", ssh_key: "SSH 私钥", host_key: "主机验证", runner_cleanup: "Runner 清理协议",
+  auth: "Cursor 登录", acp: "ACP 连接", model: "首次注册模型校验", cleanup: "诊断资源清理", ready: "聊天基本条件",
+};
+const cliStates = {
+  not_installed: "未安装或在当前路径下找不到", installed: "已找到，安装或权限有误", executable: "可执行，版本已确认",
+  version_unverified: "版本未验证", incompatible: "运行环境不兼容", unconfigured: "CLI 路径格式有误",
+};
 const utcTime = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "medium", timeZone: "UTC" });
 let diagnosticBridge;
 let diagnosing = false;
@@ -169,7 +177,7 @@ function recentRequest(request) {
 }
 
 function setDiagnosticButtons() {
-  for (const id of ["check-connection", "test-model"]) byId(id).disabled = diagnosing || !diagnosticBridge;
+  for (const id of ["check-environment", "check-connection", "test-model"]) byId(id).disabled = diagnosing || !diagnosticBridge;
 }
 
 function diagnosticDetails(list, entries) {
@@ -194,19 +202,30 @@ async function diagnose(action) {
   const details = byId(`${action}-result`);
   details.hidden = true;
   status.hidden = false;
-  status.textContent = action === "check" ? "正在检查连接…" : "正在测试模型…";
+  status.textContent = { environment: "正在检查环境…", check: "正在检查连接…", test: "正在测试模型…" }[action];
   try {
-    const data = await diagnosticBridge.apiPost("usage/dashboard", { action });
-    if (action === "check") {
-      status.textContent = `检查完成 · ${transports[data.transport] || "Runner 未确认"}`;
-      diagnosticDetails(details, Object.entries(diagnosticSteps)
+    const transport = byId("environment-mode").value;
+    const payload = action === "environment" && transport ? { action, transport } : { action };
+    const data = await diagnosticBridge.apiPost("usage/dashboard", payload);
+    if (action !== "test") {
+      status.textContent = `检查完成 · ${transports[data.transport] || "运行方式待确认"}`;
+      const notes = [
+        ["配置方式", transports[data.configured_transport]],
+        ["选择 SSH 的原因", data.auto_reason],
+        ["CLI 路径", data.cli_path],
+        ["实际 CLI 入口", data.cli_resolved_path !== data.cli_path ? data.cli_resolved_path : null],
+        ["CLI 版本", data.cli_version],
+        ["CLI 状态", cliStates[data.cli_state]],
+        ["root 风险", data.root_warning ? "AstrBot 正以 root 运行。直接模式中的 CLI 也以 root 运行，建议换用低权限用户。" : null],
+      ].filter(([, value]) => value);
+      diagnosticDetails(details, [...notes, ...Object.entries(diagnosticSteps)
         .filter(([key]) => data.steps[key])
-        .map(([key, title]) => [title, `${diagnosticLabels[data.steps[key].status]} · ${data.steps[key].reason}`]));
+        .map(([key, title]) => [title, `${diagnosticLabels[data.steps[key].status]} · ${data.steps[key].reason}`])]);
     } else {
       status.textContent = `${diagnosticLabels[data.status]} · ${data.reason}`;
       diagnosticDetails(details, [
         ["实际 ACP 模型", data.model_id || "未确认"],
-        ["Runner", transports[data.transport] || "未确认"],
+        ["运行方式", transports[data.transport] || "未确认"],
         ["耗时", Number.isFinite(data.duration_ms) ? `${count(data.duration_ms)} ms` : "—"],
       ]);
     }
@@ -220,6 +239,7 @@ async function diagnose(action) {
 
 function render(data) {
   current = data;
+  showDirectRisk();
   recentRequest(data.recent_request);
   const stats = data.totals;
   const live = data.runtime;
@@ -292,6 +312,12 @@ async function refresh() {
   }
 }
 
+function showDirectRisk() {
+  byId("direct-risk").hidden = current?.transport !== "local_direct" && byId("environment-mode").value !== "local_direct";
+}
+
+byId("environment-mode").addEventListener("change", showDirectRisk);
+byId("check-environment").addEventListener("click", () => diagnose("environment"));
 byId("check-connection").addEventListener("click", () => diagnose("check"));
 byId("test-model").addEventListener("click", () => diagnose("test"));
 byId("refresh").addEventListener("click", refresh);

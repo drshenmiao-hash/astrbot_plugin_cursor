@@ -3,10 +3,11 @@
 import asyncio
 import time
 
-from .diagnostics import diagnose
+from .diagnostics import diagnose, safe_cli_version
 from .engine import Engine
 from .errors import MESSAGES, CursorError
 from .request_status import safe_code, safe_model_id, safe_transport
+from .settings import LOCAL_TRANSPORTS
 
 _START_TIMEOUT = 20
 _CHECK_TIMEOUT = 25
@@ -22,67 +23,83 @@ def _reason(code):
     return MESSAGES.get(safe_code(code), "检查失败，原始输出已隐藏。")
 
 
-def _static_steps(report):
-    mode = report.get("transport")
-    if mode == "local":
-        runner_keys = ("file_isolation", "cli_installation_or_sandbox")
-        cli_installation = "cli_installation"
-        auth = report.get("login_file")
-    else:
-        runner_keys = (
-            "ssh_configuration",
-            "ssh_connection",
-            "runner_protocol",
-            "image_sha",
-            "runner_cleanup_protocol",
-        )
-        cli_installation = "cli_executable"
-        auth = report.get("login_volume")
-    runner_error = next(
-        (
-            report[key]
-            for key in runner_keys
-            if report.get(key) in MESSAGES and report[key] not in {"cli_missing", "cli_layout"}
-        ),
-        None,
-    )
-    cli_error = report.get(cli_installation) if report.get(cli_installation) in MESSAGES else None
-    if report.get("cli_installation_or_sandbox") in {"cli_missing", "cli_layout"}:
-        cli_error = report["cli_installation_or_sandbox"]
-    runner_ok = (
-        report.get("file_isolation") == "ok"
-        if mode == "local"
-        else all(
-            report.get(key) == "ok"
-            for key in ("ssh_connection", "image_sha", "runner_cleanup_protocol")
-        )
-    )
+def _dependency(code, passed):
+    if code == "ok":
+        return _step("passed", passed)
+    if code in MESSAGES:
+        return _step("failed", _reason(code))
+    return _step("unknown", "待检查。")
 
-    if runner_error:
-        runner = _step("failed", _reason(runner_error))
-    elif runner_ok:
-        runner = _step(
-            "passed", "本地隔离可用。" if mode == "local" else "SSH 运行器已响应，清理协议可用。"
+
+def _static_steps(report):
+    mode = report["transport"]
+    local = mode in LOCAL_TRANSPORTS
+    cli_code = report.get("cli_installation" if local else "cli_executable")
+    version = safe_cli_version(report.get("cli_version"))
+    if cli_code == "ok" and not version:
+        cli = _step("unknown", "已检查执行权限，版本未验证。")
+    else:
+        cli = _dependency(cli_code, f"版本 {version}。")
+
+    if local:
+        sandbox = report.get("file_isolation")
+        runner = (
+            _dependency(report.get("local_runtime", "ok"), "临时工作目录可用。")
+            if mode == "local_direct"
+            else _dependency(sandbox, "bubblewrap 已实际创建沙盒。")
         )
+        steps = {
+            "bubblewrap": _step("disabled", "管理员选择了直接运行。")
+            if mode == "local_direct"
+            else _dependency(report.get("bubblewrap"), "已找到 bubblewrap。"),
+        }
+        login = report.get("login_file")
     else:
-        runner = _step("skipped", "依赖检查未确认运行器可用。")
-    if cli_error:
-        cli = _step("failed", _reason(cli_error))
-    elif report.get(cli_installation) == "ok" and report.get("cli_version") not in {
-        None,
-        "unknown",
-    }:
-        cli = _step("passed", "Cursor CLI 版本检查通过。")
-    else:
-        cli = _step("unknown", "未确认 Cursor CLI 能正常执行。")
-    login = (
-        _step("failed", _reason(auth))
-        if auth in MESSAGES
-        else _step("unknown", "已找到本地登录材料，登录有效性待确认。")
-        if auth == "ok"
-        else _step("unknown", "未确认 Cursor 登录状态。")
+        config_error = report.get("ssh_configuration")
+        ssh = report.get("ssh_connection")
+        ssh_error = config_error or (ssh if ssh in MESSAGES else None)
+        prerequisites = (
+            report.get("runner_protocol"),
+            report.get("image_sha"),
+            report.get("runner_cleanup_protocol"),
+        )
+        runner = _dependency(
+            ssh_error
+            or next((code for code in prerequisites if code in MESSAGES), None)
+            or ("ok" if ssh == "ok" and prerequisites[1:] == ("ok", "ok") else None),
+            "SSH 专用 Runner 已响应，入口校验和清理协议通过。",
+        )
+        steps = {
+            "ssh": _dependency(ssh_error or ssh, "已通过客户端密钥和固定主机公钥连接。"),
+            "ssh_key": _dependency(
+                config_error
+                if config_error in {"ssh_key_missing", "ssh_key_permissions"}
+                else ssh
+                if ssh == "ssh_auth_denied"
+                else report.get("client_key"),
+                "密钥文件及权限检查通过。",
+            ),
+            "host_key": _dependency(
+                config_error
+                if config_error == "ssh_host_key_missing"
+                else ssh
+                if ssh == "ssh_host_key_mismatch"
+                else "ok"
+                if ssh == "ok"
+                else None,
+                "Runner 主机身份已验证。",
+            ),
+            "runner_cleanup": _dependency(
+                report.get("runner_cleanup_protocol"), "Runner 支持退出清理回执。"
+            ),
+        }
+        login = report.get("login_volume")
+    auth = (
+        _step("unknown", "已找到登录材料。用「检查连接」验证 ACP 认证。")
+        if login == "ok"
+        else _dependency(login, "")
     )
-    return {"runner": runner, "cli": cli, "auth": login}
+    return {**steps, "runner": runner, "cli": cli, "auth": auth}
 
 
 async def _close(probe):
@@ -95,7 +112,7 @@ async def _close(probe):
         raise
 
 
-async def _probe(cfg, *, test=False):
+async def _probe(cfg, *, test=False, validate=False):
     probe = Engine(cfg)
     transport = model_id = error = cleanup_error = None
     stage = "runner"
@@ -107,7 +124,7 @@ async def _probe(cfg, *, test=False):
         await probe._new_client(startup_timeout=_START_TIMEOUT)
         transport = safe_transport(probe.owner.kind)
         handshake = True
-        if test:
+        if test or validate:
             stage = "model"
             client = probe.client
             async with asyncio.timeout(min(_TEST_TIMEOUT, cfg["timeout_seconds"])):
@@ -116,7 +133,8 @@ async def _probe(cfg, *, test=False):
                     model or cfg["requested_model"], resolve_alias=not model
                 )
                 model_id = safe_model_id(client.session_models.get(session_id))
-                await client.prompt(session_id, "Reply with OK.", stats=turn)
+                if test:
+                    await client.prompt(session_id, "Reply with OK.", stats=turn)
     except CursorError as exc:
         error = exc.code
         stage = exc.stage or ("auth" if error == "not_logged_in" else stage)
@@ -162,14 +180,17 @@ def _auth_acknowledged():
     return _step("unknown", "ACP 认证接口已应答，账号实际可用性需通过模型请求确认。")
 
 
-async def check_connection(cfg, *, live=None):
+async def check_environment(cfg):
     try:
         async with asyncio.timeout(_CHECK_TIMEOUT):
             report = await diagnose(cfg)
-    except (TimeoutError, CursorError) as exc:
+    except (TimeoutError, CursorError, OSError) as exc:
         report = {"transport": cfg["transport"]}
         dependency_error = _step(
-            "failed", _reason(exc.code) if isinstance(exc, CursorError) else "依赖检查超时。"
+            "failed",
+            _reason(exc.code)
+            if isinstance(exc, CursorError)
+            else "环境检查未完成，请检查路径及权限。",
         )
     else:
         dependency_error = None
@@ -177,28 +198,77 @@ async def check_connection(cfg, *, live=None):
     steps = _static_steps(report)
     if dependency_error:
         steps["runner"] = dependency_error
-    steps["acp"] = _step("skipped", "运行器或登录材料未就绪，未发起 ACP 握手。")
+    if steps["runner"]["status"] == steps["cli"]["status"] == "passed":
+        steps["environment"] = _step("passed", "运行端与 CLI 版本检查通过。")
+    else:
+        steps["environment"] = _step("unknown", "请处理运行端或 CLI 检查结果。")
+    steps["model"] = (
+        _step("passed", f"已校验 {cfg['model']}。")
+        if cfg["model"]
+        else _step("unknown", "模型已填写，等待 ACP 校验。")
+        if cfg["requested_model"]
+        else _step("skipped", "请在插件设置填入明确的模型 ID 并保存。")
+    )
     transport = safe_transport(report["transport"])
+    automatic = cfg["transport"] == "auto" and transport == "ssh"
+    return {
+        "transport": transport,
+        "configured_transport": cfg["transport"],
+        "cli_path": report.get("cli_path") if transport in LOCAL_TRANSPORTS or automatic else None,
+        "cli_resolved_path": report.get("cli_resolved_path")
+        if transport in LOCAL_TRANSPORTS
+        else None,
+        "cli_state": report.get("cli_state") if transport in LOCAL_TRANSPORTS else None,
+        "cli_version": safe_cli_version(report.get("cli_version")),
+        "root_warning": report.get("root_warning", False),
+        "auto_reason": (
+            _reason(report["cli_installation"])
+            if automatic and report.get("cli_installation") in MESSAGES
+            else _reason("sandbox_missing")
+            if automatic
+            else None
+        ),
+        "steps": steps,
+    }
+
+
+async def check_connection(cfg, *, live=None):
+    report = await check_environment(cfg)
+    steps = report["steps"]
+    steps["acp"] = _step("skipped", "运行端或登录材料未就绪。")
+    if callable(live):
+        live = live()
+    auth_acknowledged = False
     if live and live["handshake"]:
-        transport = live["transport"] or transport
+        report["transport"] = live["transport"] or report["transport"]
         steps["acp"] = _step("passed", "读取现有连接的 ACP 握手结果。")
         if live["authenticated"]:
+            auth_acknowledged = True
             steps["auth"] = _auth_acknowledged()
+    elif live:
+        steps["acp"] = _step("skipped", "聊天运行端正在启动，本次未建立诊断连接。")
     elif (
         steps["runner"]["status"] == "passed"
         and steps["cli"]["status"] != "failed"
         and steps["auth"]["status"] != "failed"
     ):
-        result = await _probe(cfg)
-        transport = result["transport"] or transport
+        result = await _probe(cfg, validate=bool(cfg["requested_model"]))
+        report["transport"] = result["transport"] or report["transport"]
         code = result["code"]
         if code == "runner_in_use":
-            steps["acp"] = _step("skipped", "运行器已被占用，未启动诊断连接。")
+            steps["acp"] = _step("skipped", "运行端已被占用，本次未建立诊断连接。")
         elif result["handshake"]:
-            steps["runner"] = _step("passed", "诊断运行器已启动。")
-            steps["cli"] = _step("passed", "Cursor CLI 已响应。")
             steps["acp"] = _step("passed", "ACP v1 握手通过。")
-            steps["auth"] = _auth_acknowledged() if code == "ok" else _step("failed", _reason(code))
+            auth_acknowledged = code == "ok" or result["stage"] == "model"
+            steps["auth"] = (
+                _auth_acknowledged() if auth_acknowledged else _step("failed", _reason(code))
+            )
+            if result["stage"] == "model":
+                steps["model"] = (
+                    _step("passed", f"ACP 已确认 {result['model_id']}。")
+                    if code == "ok"
+                    else _step("failed", _reason(code))
+                )
         elif result["stage"] == "auth":
             steps["auth"] = _step("failed", _reason(code))
         elif result["stage"] == "handshake":
@@ -207,7 +277,15 @@ async def check_connection(cfg, *, live=None):
             steps["runner"] = _step("failed", _reason(code))
         if failure := result["cleanup"] or (code if code in _CLEANUP_ERRORS else None):
             steps["cleanup"] = _step("failed", _reason(failure))
-    return {"transport": transport, "steps": steps}
+    if auth_acknowledged and steps["model"]["status"] == "passed" and "cleanup" not in steps:
+        steps["ready"] = (
+            _step("passed", "已满足基本连接条件。请在 AstrBot 选择已启用的 Cursor 模型开始聊天。")
+            if cfg["model"]
+            else _step("unknown", "请重载插件以完成模型注册，再选择该模型。")
+        )
+    else:
+        steps["ready"] = _step("unknown", "请根据上方结果完成登录和模型校验，再检查连接。")
+    return report
 
 
 async def test_model(cfg, *, live=None):

@@ -5,11 +5,14 @@ from pathlib import Path
 
 from .errors import MESSAGES, CursorError
 
+TRANSPORTS = ("auto", "local", "local_direct", "ssh")
+LOCAL_TRANSPORTS = ("local", "local_direct")
+
 
 def settings_from(config):
     try:
         mode = config.get("transport", "auto")
-        if mode not in {"auto", "local", "ssh"}:
+        if mode not in TRANSPORTS:
             raise ValueError
         host = config.get("ssh_host", "cursor-cli")
         if not isinstance(host, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", host):
@@ -59,7 +62,7 @@ def settings_from(config):
                 raise ValueError
             if value:
                 value = str(Path(value).expanduser())
-                if not Path(value).is_absolute():
+                if name != "cli_binary" and not Path(value).is_absolute():
                     raise ValueError
             options[name] = value
         return options

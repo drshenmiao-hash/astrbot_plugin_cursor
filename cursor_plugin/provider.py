@@ -72,7 +72,7 @@ class CursorCLIProvider(Provider):
         config = {**provider_config, "modalities": ["text", "image"]}
         super().__init__(config, provider_settings)
         self.set_model(model)
-        self.engine = runtime.acquire_engine() if cfg["model"] else None
+        self.engine = runtime.acquire_engine() if cfg["model"] and model else None
         self.settings = cfg
         self._pending = set()
         self._closed = False
@@ -249,13 +249,17 @@ class CursorCLIProvider(Provider):
                     normalize_messages, *arguments, **options, image_input=image_input
                 )
             stage = "model"
-            await runtime.ensure_model_validated()
+            chosen = self.get_model() if model is None else model
+            if not isinstance(chosen, str) or chosen.strip().casefold() in {
+                "",
+                "auto",
+                "auto-smart",
+                "default",
+            }:
+                raise CursorError("model")
+            await runtime.ensure_connection_available()
             if self._closed:
                 raise CursorError("closed")
-            chosen = runtime.resolve_model_id(model if model is not None else self.get_model())
-            cfg = runtime.settings()
-            if chosen != cfg["model"]:
-                raise CursorError("model")
             if self.engine is None:
                 self.engine = runtime.acquire_engine()
         except Exception as failure:
@@ -290,6 +294,8 @@ class CursorCLIProvider(Provider):
                 sequence=request_sequence,
                 stats_session=stats_session,
                 request_max_retries=request_max_retries,
+                target_model=chosen,
+                resolve_alias=not runtime.is_catalog_model_id(chosen),
                 **({"images": image_input.blocks} if image_input and image_input.blocks else {}),
             )
         )

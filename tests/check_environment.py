@@ -58,7 +58,7 @@ def agent_pid(engine):
             root = Path(f"/proc/{pid}")
             try:
                 argv = (root / "cmdline").read_bytes().split(b"\0")
-                if b"/opt/cursor/index.js" in argv and b"acp" in argv:
+                if b"acp" in argv and any(part.endswith(b"/index.js") for part in argv):
                     return pid
                 pending.extend(int(p) for p in (root / f"task/{pid}/children").read_text().split())
             except FileNotFoundError:
@@ -88,7 +88,7 @@ async def run(args, cfg):
     else:
         engine = Engine(cfg)
         try:
-            diagnostic = await diagnose(cfg, include_raw=True)
+            diagnostic = await diagnose(cfg)
         except Exception:
             diagnostic = {"exception": traceback.format_exc()}
     failed = 0
@@ -100,13 +100,31 @@ async def run(args, cfg):
         "ssh_unreachable",
         "cli_missing",
         "cli_layout",
+        "cli_path_absolute",
+        "cli_not_executable",
+        "cli_incompatible",
+        "auth_file_permissions",
+        "direct_workspace",
         "not_logged_in",
         "sandbox_missing",
         "sandbox_unavailable",
         "config",
     }
     missing = [
-        str(value) for value in diagnostic.values() if isinstance(value, str) and value in blockers
+        diagnostic[key]
+        for key in (
+            "cli_installation",
+            "bubblewrap",
+            "file_isolation",
+            "local_runtime",
+            "login_file",
+            "ssh_configuration",
+            "ssh_connection",
+            "cli_executable",
+            "login_volume",
+        )
+        if (diagnostic.get("transport") != "ssh" or key not in {"cli_installation", "bubblewrap"})
+        and diagnostic.get(key) in blockers
     ]
     enabled = args.mock or args.allow_model_requests
     reason = None

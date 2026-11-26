@@ -1,8 +1,8 @@
 name: astrbot_plugin_cursor
 display_name: Cursor CLI
 short_desc: AstrBot 原生 Cursor CLI Provider，支持文本、图片输入、用量管理和连通性诊断。
-desc: 通过官方 Cursor CLI 的 ACP 接入指定模型，固定 Ask 模式。支持会话复用、按轮转发图片、WebUI 用量统计与连通性诊断，以及本地隔离或专用 SSH 运行器。
-version: 0.4.5
+desc: 通过官方 Cursor CLI 的 ACP 接入指定模型，固定 Ask 模式。支持会话复用、按轮转发图片、WebUI 用量统计与连通性诊断，以及本地隔离、显式直接运行或专用 SSH 运行器。
+version: 0.4.6
 author: drshenmiao-hash
 repo: https://github.com/drshenmiao-hash/astrbot_plugin_cursor
 astrbot_version: ">=4.29.4,<5"

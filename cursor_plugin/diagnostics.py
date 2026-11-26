@@ -3,130 +3,193 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 import socket
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .credentials import read_browser_credentials
 from .errors import CursorError
-from .launcher import bwrap_argv, local_bundle, ssh_argv, ssh_error_code
-from .metrics import record
+from .launcher import (
+    bwrap_argv,
+    direct_cli_env,
+    direct_scratch,
+    inspect_local_cli,
+    local_credentials,
+    select_transport,
+    ssh_argv,
+    ssh_error_code,
+)
 from .process import run_process
 from .protocol import RUNNER_CLEANUP_PROTOCOL
-from .settings import settings_from
+from .settings import LOCAL_TRANSPORTS, settings_from
+
+_VERSION = re.compile(rb"\d{4}\.\d{2}\.\d{2}-[A-Za-z0-9]{1,32}")
+_VERSION_TIMEOUT = 5
 
 
-async def diagnose(cfg, *, include_raw=False):
-    report = {"model_configured": bool(cfg["model"])}
-    raw_results = {}
+def safe_cli_version(value):
+    if isinstance(value, str) and value.isascii() and _VERSION.fullmatch(value.encode()):
+        return value
+    return None
 
-    def capture(name, code, stdout, stderr):
-        # Only dependency probes: never capture authenticate/session/prompt frames.
-        if include_raw:
-            raw_results[name] = {
-                "exit_code": code,
-                "stdout": stdout.decode("utf-8", errors="replace"),
-                "stderr": stderr.decode("utf-8", errors="replace"),
-            }
 
-    if include_raw:
-        report["raw_probes"] = raw_results
-    mode = cfg["transport"]
-    if mode == "auto":
-        try:
-            local_bundle(cfg)
-            mode = "local" if Path(cfg["bubblewrap_binary"]).is_file() else "ssh"
-        except CursorError:
-            mode = "ssh"
-    report["transport"] = mode
-    with TemporaryDirectory(prefix="cursor-diagnose-") as folder:
+async def _local_checks(cfg, report):
+    mode = report["transport"]
+    path, bundle, error = inspect_local_cli(cfg)
+    report["cli_installation"] = error or "ok"
+    report["cli_path"] = str(path) if path else None
+    report["cli_resolved_path"] = str(bundle / "cursor-agent") if bundle else None
+    report["cli_source"] = "configured" if cfg["cli_binary"] else "path"
+    report["cli_state"] = {
+        "cli_missing": "not_installed",
+        "cli_path_absolute": "unconfigured",
+        "cli_layout": "installed",
+        "sandbox_path_conflict": "installed",
+        "cli_not_executable": "installed",
+        "cli_incompatible": "incompatible",
+    }.get(error, "version_unverified")
+    sandbox = Path(cfg["bubblewrap_binary"])
+    report["bubblewrap"] = (
+        "disabled" if mode == "local_direct" else "ok" if sandbox.is_file() else "sandbox_missing"
+    )
+    if mode == "ssh":  # Automatic selection retained the existing SSH route.
+        return
+
+    report["file_isolation"] = "disabled" if mode == "local_direct" else report["bubblewrap"]
+    try:
+        local_credentials(cfg)
+        report["login_file"] = "ok"
+    except CursorError as exc:
+        report["login_file"] = exc.code
+
+    try:
+        scratch = (
+            direct_scratch()
+            if mode == "local_direct"
+            else TemporaryDirectory(prefix="cursor-diagnose-")
+        )
+    except CursorError as exc:
+        report["local_runtime"] = exc.code
+        return
+    except OSError:
+        report["local_runtime"] = "cli_incompatible"
+        return
+
+    with scratch as folder:
+        home, work = Path(folder) / "home", Path(folder) / "work"
+        home.mkdir(mode=0o700)
+        work.mkdir(mode=0o700)
         env = {"PATH": "/usr/bin:/bin", "HOME": folder, "LANG": "C.UTF-8"}
         if mode == "local":
             try:
-                bundle = local_bundle(cfg)
-                report["cli_installation"] = "ok"
-                home, work = Path(folder) / "home", Path(folder) / "work"
-                home.mkdir()
-                work.mkdir()
-                argv = bwrap_argv(cfg, bundle, home, work)
-                argv = argv[: argv.index("--") + 1] + ["/usr/bin/true"]
-                code, out, err = await run_process(
-                    argv, b"", cwd=folder, env=env, timeout=10, output_limit=16384
+                argv = bwrap_argv(cfg, bundle, home, work, command=["/usr/bin/true"])
+                code, _, _ = await run_process(
+                    argv, b"", cwd=folder, env=env, timeout=5, output_limit=4096
                 )
-                capture("bubblewrap_true", code, out, err)
                 report["file_isolation"] = "ok" if code == 0 else "sandbox_unavailable"
-                if code == 0:
-                    version_argv = argv[: argv.index("--") + 1] + [
-                        "/opt/cursor/cursor-agent",
-                        "--version",
-                    ]
-                    code, out, err = await run_process(
-                        version_argv, b"", cwd=folder, env=env, timeout=10, output_limit=16384
-                    )
-                    capture("cli_version", code, out, err)
-                    match = re.search(rb"\b\d{4}\.\d{2}\.\d{2}-[A-Za-z0-9]+\b", out)
-                    report["cli_version"] = match[0].decode() if code == 0 and match else "unknown"
             except CursorError as exc:
-                report["cli_installation_or_sandbox"] = exc.code
-            try:
-                read_browser_credentials(Path(cfg["cursor_auth_path"]))
-                report["login_file"] = "ok"
-            except CursorError as exc:
-                report["login_file"] = exc.code
-        else:
-            try:
-                argv = ssh_argv(cfg, diagnose=True)
-                report["client_key"] = report["known_hosts_file"] = "ok"
-            except CursorError as exc:
-                report["ssh_configuration"] = exc.code
-                record("diagnostic", transport=mode, code=exc.code)
-                return report
-            code, out, err = await run_process(
-                [cfg["ssh_binary"], "-V"], b"", cwd=folder, env=env, timeout=5, output_limit=16384
-            )
-            capture("ssh_version", code, out, err)
-            match = re.search(rb"OpenSSH_[0-9.p]+", err)
-            report["ssh_version"] = match[0].decode() if code == 0 and match else "unknown"
-            try:
-                code, out, err = await run_process(
-                    argv, b"", cwd=folder, env=env, timeout=20, output_limit=16384
+                report["file_isolation"] = (
+                    exc.code
+                    if exc.code in {"sandbox_missing", "sandbox_path_conflict"}
+                    else "sandbox_unavailable"
                 )
-                capture("ssh_diagnose", code, out, err)
-                if code:
-                    report["ssh_connection"] = ssh_error_code(err)
-                else:
-                    report["ssh_connection"] = "ok"
-                    data = json.loads(out)
-                    expected = {"cli_executable", "login_volume", "cli_version", "image_sha"}
-                    if not isinstance(data, dict) or not expected <= data.keys():
-                        raise CursorError("protocol")
-                    capability = data.get("cleanup_protocol")
-                    report["runner_cleanup_protocol"] = (
-                        "ok"
-                        if type(capability) is int and capability == RUNNER_CLEANUP_PROTOCOL
-                        else "runner_cleanup_unsupported"
-                    )
-                    for name in expected:
-                        value = data[name]
-                        # Only protocol codes or simple build versions can be displayed.
-                        report[name] = (
-                            value
-                            if isinstance(value, str)
-                            and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", value)
-                            else "unknown"
-                        )
-            except (ValueError, UnicodeError, RecursionError):
-                report["runner_protocol"] = "protocol"
-            except CursorError as exc:
-                report["ssh_connection"] = exc.code
-    for value in report.values():
-        if (
-            isinstance(value, str)
-            and value not in {"ok", "local", "ssh"}
-            and not re.search(r"\d", value)
-        ):
-            record("diagnostic", transport=mode, code=value)
+            if report["file_isolation"] != "ok":
+                return
+        if bundle is None:
+            return
+        if mode == "local":
+            argv[-1:] = ["/opt/cursor/cursor-agent", "--version"]
+        else:
+            env = direct_cli_env(home)
+            argv = [str(bundle / "cursor-agent"), "--disable-auto-update", "--version"]
+        try:
+            code, out, _ = await run_process(
+                argv, b"", cwd=str(work), env=env, timeout=_VERSION_TIMEOUT, output_limit=4096
+            )
+        except CursorError as exc:
+            if exc.code == "transport":
+                report["cli_installation"] = "cli_incompatible"
+                report["cli_state"] = "incompatible"
+            return
+        if code:
+            report["cli_installation"] = "cli_incompatible"
+            report["cli_state"] = "incompatible"
+        elif version := safe_cli_version(out.decode("ascii", errors="replace").strip()):
+            report["cli_version"] = version
+            report["cli_state"] = "executable"
+
+
+async def _ssh_checks(cfg, report):
+    try:
+        argv = ssh_argv(cfg, diagnose=True)
+        report["client_key"] = report["known_hosts_file"] = "ok"
+    except (OSError, CursorError) as exc:
+        report["ssh_configuration"] = exc.code if isinstance(exc, CursorError) else "config"
+        return
+    with TemporaryDirectory(prefix="cursor-diagnose-") as folder:
+        env = {"PATH": "/usr/bin:/bin", "HOME": folder, "LANG": "C.UTF-8"}
+        try:
+            code, _, err = await run_process(
+                [cfg["ssh_binary"], "-V"],
+                b"",
+                cwd=folder,
+                env=env,
+                timeout=3,
+                output_limit=4096,
+            )
+            match = re.search(rb"OpenSSH_[0-9.p]{1,16}", err)
+            if code == 0 and match:
+                report["ssh_version"] = match[0].decode()
+        except CursorError:
+            pass
+        try:
+            code, out, err = await run_process(
+                argv, b"", cwd=folder, env=env, timeout=20, output_limit=16384
+            )
+            if code:
+                report["ssh_connection"] = ssh_error_code(err)
+                return
+            report["ssh_connection"] = "ok"
+            data = json.loads(out)
+            if (
+                not isinstance(data, dict)
+                or not {"cli_executable", "login_volume", "cli_version", "image_sha"} <= data.keys()
+            ):
+                raise ValueError
+            capability = data.get("cleanup_protocol")
+            report["runner_cleanup_protocol"] = (
+                "ok"
+                if type(capability) is int and capability == RUNNER_CLEANUP_PROTOCOL
+                else "runner_cleanup_unsupported"
+            )
+            for key, codes in (
+                ("cli_executable", ("ok", "cli_missing")),
+                ("login_volume", ("ok", "not_logged_in", "config")),
+                ("image_sha", ("ok", "image_sha_mismatch", "image_receipt_missing")),
+            ):
+                value = data[key]
+                report[key] = value if value in codes else "protocol"
+            report["cli_version"] = safe_cli_version(data["cli_version"])
+        except (ValueError, UnicodeError, RecursionError):
+            report["runner_protocol"] = "protocol"
+        except CursorError as exc:
+            report["ssh_connection"] = exc.code
+
+
+async def diagnose(cfg):
+    """Inspect dependencies without opening ACP or acquiring any login lock."""
+    mode = select_transport(cfg)
+    report = {
+        "transport": mode,
+        "configured_transport": cfg["transport"],
+        "model_configured": bool(cfg["requested_model"]),
+        "root_warning": mode == "local_direct" and os.geteuid() == 0,
+    }
+    if mode in LOCAL_TRANSPORTS or cfg["transport"] == "auto":
+        await _local_checks(cfg, report)
+    if mode == "ssh":
+        await _ssh_checks(cfg, report)
     return report
 
 

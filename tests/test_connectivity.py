@@ -21,6 +21,7 @@ from tests.test_usage import event
 
 LOCAL = {
     "transport": "local",
+    "bubblewrap": "ok",
     "file_isolation": "ok",
     "cli_installation": "ok",
     "cli_version": "2026.03.27-mock",
@@ -64,15 +65,36 @@ class TestConnection(unittest.IsolatedAsyncioTestCase):
             patch.object(connectivity, "diagnose", AsyncMock(return_value=LOCAL))
         )
 
-    async def test_check_calls_only_initialize_and_authenticate(self):
+    async def test_check_verifies_acp_and_model_without_prompt(self):
         data = await connectivity.check_connection(self.cfg)
-        self.assertEqual(self.calls, ["initialize", "authenticate"])
         self.assertEqual(
-            {k: item["status"] for k, item in data["steps"].items()},
-            {"runner": "passed", "cli": "passed", "acp": "passed", "auth": "unknown"},
+            self.calls,
+            [
+                "initialize",
+                "authenticate",
+                "session/new",
+                "session/set_config_option",
+                "session/set_mode",
+            ],
         )
+        for key in ("environment", "bubblewrap", "runner", "cli", "acp", "model", "ready"):
+            self.assertEqual(data["steps"][key]["status"], "passed", key)
+        self.assertEqual(data["steps"]["auth"]["status"], "unknown")
         self.doctor.assert_awaited_once_with(self.cfg)
         self.assertIsNotNone(self.processes[0].returncode)
+
+    async def test_environment_is_static_and_pending_chat_skips_connection(self):
+        self.cfg["transport"] = "local_direct"
+        self.doctor.return_value = {**LOCAL, "transport": "local_direct", "root_warning": True}
+        environment = await connectivity.check_environment(self.cfg)
+        self.assertEqual(environment["steps"]["bubblewrap"]["status"], "disabled")
+        self.assertTrue(environment["root_warning"])
+        self.assertNotIn("acp", environment["steps"])
+        result = await connectivity.check_connection(
+            self.cfg, live=lambda: {"transport": None, "handshake": False, "authenticated": False}
+        )
+        self.assertEqual(result["steps"]["acp"]["status"], "skipped")
+        self.assertEqual(self.calls, [])
 
     async def test_check_uses_read_only_live_status_and_manual_test_skips_busy(self):
         live = {"transport": "local", "handshake": True, "authenticated": True}
@@ -320,3 +342,27 @@ class TestDiagnosticsAccess(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(data["data"], expected)
         self.assertEqual(headers["Cache-Control"], "no-store")
         model.assert_awaited_once_with(cfg, live=None)
+
+    async def test_only_admin_can_preview_modes_and_preview_cannot_change_settings(self):
+        self.request.json.return_value = {"action": "environment", "transport": "local_direct"}
+        cfg = settings_from({"model_id": "grok-4.6", "transport": "local"})
+        with (
+            patch.object(web, "settings", side_effect=lambda: cfg.copy()),
+            patch.object(web, "check_environment", AsyncMock(return_value={})) as environment,
+        ):
+            self.request.username = "someone"
+            _, status, _ = await self.handler.handle()
+            self.assertEqual(status, 403)
+            environment.assert_not_awaited()
+            self.request.username = "admin"
+            _, status, _ = await self.handler.handle()
+            self.assertEqual(status, 200)
+            environment.assert_awaited_once_with({**cfg, "transport": "local_direct", "model": ""})
+            self.assertEqual(cfg["transport"], "local")
+            for body in (
+                {"action": "test", "transport": "local_direct"},
+                {"action": "environment", "transport": "local_direct", "cli_binary": "/tmp/bin"},
+            ):
+                self.request.json.return_value = body
+                _, status, _ = await self.handler.handle()
+                self.assertEqual(status, 400)

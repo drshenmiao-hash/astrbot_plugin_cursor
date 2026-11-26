@@ -1,9 +1,51 @@
 {
-  "model_id": {
-    "description": "明确的 Cursor 模型 ID",
+  "transport": {
+    "description": "Cursor 运行方式",
+    "type": "string",
+    "default": "auto",
+    "options": [
+      "auto",
+      "local",
+      "local_direct",
+      "ssh"
+    ],
+    "hint": "直接运行没有系统级隔离。临时 HOME、Ask 模式和工具限制不能代替沙盒。若 AstrBot 以 root 运行，CLI 也会以 root 运行。可在「用量与运行状态」先检查环境。",
+    "labels": [
+      "自动检测",
+      "本地运行（bubblewrap 隔离，推荐）",
+      "本地运行（不使用 bubblewrap）",
+      "SSH 专用 Runner"
+    ],
+    "subtitles": [
+      "保留原有选择规则。可尝试本地隔离或 SSH，绝不会选择直接运行。",
+      "要求 bubblewrap 能实际创建沙盒，隔离失败时会报错。",
+      "仅由管理员选用。CLI 可访问当前用户有权访问的文件。建议使用低权限用户或受限容器。",
+      "适合需要专用登录卷，或 AstrBot 环境不能使用 bubblewrap 的部署。"
+    ]
+  },
+  "cli_binary": {
+    "description": "本地官方 CLI 路径",
     "type": "string",
     "default": "",
-    "hint": "可填 ACP modelId、唯一展示名或已支持的管理端 ID；启动/重载通过 ACP availableModels 校验。cursor-grok-4.6-high 映射到 grok-4.6。新建原生 id/model 使用解析后的 modelId；空/auto/default 不建模型，有歧义时报错，不自动换模型。"
+    "hint": "留空在 AstrBot 服务的 PATH 中查找 agent 或 cursor-agent。也可填写官方入口的绝对路径，请保留完整发行目录。"
+  },
+  "cursor_auth_path": {
+    "description": "本地 Cursor 登录文件",
+    "type": "string",
+    "default": "~/.config/cursor/auth.json",
+    "hint": "两种本地方式均使用。只向临时 HOME 提供此文件中的 Cursor 登录令牌。直接运行需要由服务用户拥有的私有文件，建议使用专用登录目录。"
+  },
+  "model_id": {
+    "description": "首次校验与注册的 Cursor 模型 ID",
+    "type": "string",
+    "default": "",
+    "hint": "填写套餐内的明确 ACP modelId、唯一展示名或明确别名。保存时通过 ACP 校验并注册。使用时由 AstrBot 选中的 Cursor 模型或单次请求指定的模型决定。"
+  },
+  "bubblewrap_binary": {
+    "description": "本地文件隔离程序",
+    "type": "string",
+    "default": "/usr/bin/bwrap",
+    "hint": "用于本地隔离和自动检测。直接运行时此项不生效。"
   },
   "image_unsupported_message": {
     "description": "图片不支持时的回复",
@@ -42,34 +84,6 @@
     "type": "int",
     "default": 120,
     "hint": "从实际执行开始计时，不包含排队。超时发送 ACP 取消，5 秒内未确认则重置运行时；不自动重试。"
-  },
-  "transport": {
-    "description": "进程连接方式",
-    "type": "string",
-    "default": "auto",
-    "options": [
-      "auto",
-      "local",
-      "ssh"
-    ],
-    "hint": "auto 优先本地官方 CLI + bubblewrap；没有所需组件时使用 SSH。不会降级为无文件隔离执行。"
-  },
-  "cli_binary": {
-    "description": "本地官方 CLI 路径",
-    "type": "string",
-    "default": "",
-    "hint": "留空自动查找 agent / cursor-agent；只支持官方发行包目录结构。"
-  },
-  "cursor_auth_path": {
-    "description": "本地 Cursor 登录文件",
-    "type": "string",
-    "default": "~/.config/cursor/auth.json",
-    "hint": "本地模式使用；只复制此登录文件，不暴露整个 HOME。"
-  },
-  "bubblewrap_binary": {
-    "description": "本地文件隔离程序",
-    "type": "string",
-    "default": "/usr/bin/bwrap"
   },
   "max_concurrency": {
     "description": "同时执行的请求数",

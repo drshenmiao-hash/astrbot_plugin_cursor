@@ -27,6 +27,8 @@ class Job:
     enqueued: float
     deadline: float
     input_bytes: int
+    target_model: str
+    resolve_alias: bool = False
     started: asyncio.Event = field(default_factory=asyncio.Event)
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
     sent_bytes: int = 0
@@ -91,6 +93,8 @@ class Engine:
         stats_session=None,
         images=None,
         request_max_retries=1,
+        target_model=None,
+        resolve_alias=False,
     ):
         await self._start_workers()
         now = time.monotonic()
@@ -105,6 +109,8 @@ class Engine:
             now,
             now + self.cfg["queue_timeout_seconds"],
             size,
+            self.cfg["model"] if target_model is None else target_model,
+            resolve_alias,
         )
         job.sequence = sequence if type(sequence) is int else None
         job.stats_session = stats_session
@@ -151,11 +157,13 @@ class Engine:
             await asyncio.gather(notice, return_exceptions=True)
             self._jobs.pop(job.request_id, None)
 
-    def _reuse(self, messages, scope):
-        cached = self.sessions.get(scope) if scope else None
+    def _reuse(self, job):
+        cached = self.sessions.get(job.scope)
+        if cached and (job.target_model, job.resolve_alias) != cached["target"]:
+            cached = None
         plan = reconcile_history(
             cached["history"] if cached else None,
-            messages,
+            job.messages,
             last_request_hashes=cached["request_hashes"] if cached else None,
         )
         if cached and plan["reused"]:
@@ -272,7 +280,7 @@ class Engine:
             while True:
                 if self.closed or job.cancel.is_set():
                     raise CursorError("closed" if self.closed else "cancelled")
-                cached, _ = self._reuse(job.messages, job.scope)
+                cached, _ = self._reuse(job)
                 exhausted = cached is None and self.session_slots >= self.cfg["max_sessions"]
                 dead = self.client is not None and self.client.closed
                 if (exhausted or dead) and self.active:
@@ -293,7 +301,7 @@ class Engine:
                     if self.owner
                     else getattr(self.client, "ready", {}).get("transport")
                 )
-                cached, _ = self._reuse(job.messages, job.scope)
+                cached, _ = self._reuse(job)
                 if cached is None:
                     self.session_slots += 1
                 self.active += 1
@@ -342,8 +350,10 @@ class Engine:
             await asyncio.gather(turn, return_exceptions=True)
 
     async def _execute(self, job, client):
-        cached, plan = self._reuse(job.messages, job.scope)
-        if job.scope in self.sessions:
+        cached, plan = self._reuse(job)
+        previous = self.sessions.get(job.scope)
+        target = (job.target_model, job.resolve_alias)
+        if previous and previous["target"] == target:
             record(
                 "history_comparison",
                 request_id=job.request_id,
@@ -361,12 +371,20 @@ class Engine:
         job.reset_reason = (
             ("system_updated" if plan["system_changed"] else "continuous_history")
             if cached
-            else ("history_changed" if job.scope in self.sessions else "new_conversation")
+            else ("history_changed" if previous else "new_conversation")
         )
+        if previous and previous["target"] != target:
+            job.reset_reason = "model_changed"
         if not job.scope:
             job.reset_reason = "no_stable_session_key"
         job.stage = "model"
-        session_id = cached["session_id"] if cached else await client.new_session(self.cfg["model"])
+        session_id = (
+            cached["session_id"]
+            if cached
+            else await client.new_session(
+                job.target_model, **({"resolve_alias": True} if job.resolve_alias else {})
+            )
+        )
         delta, image_blocks = prompt_images(delta, job.images or {})
         job.historical_images_not_attached = sum(
             entry.get("historical_images_not_attached", 0) for entry in delta
@@ -392,6 +410,7 @@ class Engine:
             if job.scope:
                 self.sessions[job.scope] = {
                     "session_id": session_id,
+                    "target": target,
                     "history": history_state(
                         job.messages + [{"role": "assistant", "content": reply}]
                     ),
@@ -430,7 +449,7 @@ class Engine:
         try:
             if job.cancel.is_set() or job.future.cancelled():
                 raise CursorError("cancelled")
-            cached, plan = self._reuse(job.messages, job.scope)
+            cached, plan = self._reuse(job)
             if not plan["has_new_user_input"]:
                 job.queue_ms = round((time.monotonic() - job.enqueued) * 1000)
                 job.process_reused = bool(self.client and not self.client.closed)
@@ -507,6 +526,8 @@ class Engine:
                         now,
                         now + self.cfg["queue_timeout_seconds"],
                         job.input_bytes,
+                        job.target_model,
+                        job.resolve_alias,
                         started=job.started,
                         cancel=job.cancel,
                         sequence=job.sequence,
@@ -569,6 +590,9 @@ class Engine:
             else 0,
             **job.image_limit,
         )
+
+    def has_pending_requests(self):
+        return bool(self._jobs)
 
     def health(self):
         return {

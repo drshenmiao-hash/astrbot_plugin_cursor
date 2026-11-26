@@ -118,7 +118,11 @@ async def verify_sessions(provider):
 async def verify(root):
     from astrbot.core import LogBroker, db_helper
     from astrbot.core.core_lifecycle import AstrBotCoreLifecycle
-    from astrbot.dashboard.services.config_service import ConfigProfileService
+    from astrbot.core.provider.entities import ProviderType
+    from astrbot.dashboard.services.config_service import (
+        ConfigProfileService,
+        ProviderConfigService,
+    )
 
     installed = root / "data/plugins" / PLUGIN
     shutil.copytree(
@@ -372,6 +376,34 @@ async def verify(root):
                 assert current_session == original_session
         print(
             "PASS actual AstrBot payload image/text/text/text/image reuses one ACP session and sends images only on the image turns"
+        )
+
+        other_id = "dashboard-cursor-model"
+        other_model = "mock-second-model"
+        catalog = [{"modelId": model} for model in (MODEL, other_model)]
+        with patch.dict(os.environ, {"TEST_CURSOR_CATALOG": json.dumps(catalog)}):
+            with patch.object(
+                plugins,
+                "_import_plugin_with_dependency_recovery",
+                side_effect=import_with_mock_owner,
+            ):
+                success, error = await plugins.reload(PLUGIN)
+            assert success, error
+            await ProviderConfigService(host).create_provider(
+                {**cursor_model, "id": other_id, "model": other_model}, cursor_source["id"]
+            )
+            for chosen, expected in ((MODEL, MODEL), (other_id, other_model), (MODEL, MODEL)):
+                updated = deepcopy(dict(host.astrbot_config_mgr.default_conf))
+                updated["agent_runner"]["config"]["model"]["provider_id"] = chosen
+                with patch.object(host, "reload_pipeline_scheduler", new_callable=AsyncMock):
+                    assert await profiles.update_profile("default", updated) == "保存成功~"
+                provider = await manager.get_using_provider_async(ProviderType.CHAT_COMPLETION)
+                assert provider.meta().id == chosen
+                replies, fallbacks = await run_chat(provider, "MOCK_MODEL_ID", cid="model-switch")
+                assert fallbacks == 0 and replies[0].startswith(expected + "/"), replies
+            assert json.loads(config_path.read_text(encoding="utf-8-sig"))["model_id"] == MODEL
+        print(
+            "PASS real AstrBot model registration and system selection switch the ACP target without editing the plugin seed or reloading between selections"
         )
     finally:
         await host.stop()

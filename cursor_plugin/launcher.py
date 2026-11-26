@@ -4,18 +4,18 @@ import asyncio
 import fcntl
 import json
 import os
-import shutil
 import signal
 import stat
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from .credentials import DENY, cli_env, read_browser_credentials, write_credentials
+from .credentials import DENY, browser_tokens, cli_env, read_browser_credentials, write_credentials
 from .errors import CursorError
 from .logic import classify_error
 from .metrics import record
 from .process import run_process, wait_for_cleanup
 from .protocol import RUNNER_CLEANUP_CONFIRMED, RUNNER_CLEANUP_PROTOCOL
+from .settings import LOCAL_TRANSPORTS
 
 
 def ssh_argv(cfg, *, diagnose=False):
@@ -66,26 +66,83 @@ def ssh_error_code(raw):
     return "ssh_unreachable" if code == "cli_failed" else code
 
 
-def local_bundle(cfg):
-    command = cfg["cli_binary"] or shutil.which("agent") or shutil.which("cursor-agent")
-    if not command or not Path(command).is_file():
+def _bundle_at(command, cfg):
+    if not command.is_absolute():
+        raise CursorError("cli_path_absolute")
+    if not command.is_file():
         raise CursorError("cli_missing")
-    bundle = Path(command).resolve().parent
+    if not os.access(command, os.X_OK):
+        raise CursorError("cli_not_executable")
+    target = command.resolve()
+    bundle = target.parent
     if bundle in {Path("/"), Path.home().resolve()}:
         raise CursorError("cli_layout")
     for protected in cfg.get("protected_paths", []):
-        target = Path(protected).resolve()
-        if target == bundle or bundle in target.parents:
+        protected_path = Path(protected).resolve()
+        if protected_path == bundle or bundle in protected_path.parents:
             raise CursorError("sandbox_path_conflict")
-    if not all((bundle / name).is_file() for name in ("cursor-agent", "node", "index.js")):
+    if target.name != "cursor-agent" or not all(
+        (bundle / name).is_file() and (bundle / name).resolve().parent == bundle
+        for name in ("cursor-agent", "node", "index.js")
+    ):
         raise CursorError("cli_layout")
+    if not os.access(bundle / "node", os.X_OK):
+        raise CursorError("cli_not_executable")
+    if not os.access(bundle / "index.js", os.R_OK):
+        raise CursorError("cli_incompatible")
     return bundle
 
 
-def bwrap_argv(cfg, bundle, home, work):
+def inspect_local_cli(cfg):
+    configured = cfg["cli_binary"]
+    paths = (
+        [Path(configured)]
+        if configured
+        else (
+            Path(folder) / name
+            for name in ("agent", "cursor-agent")
+            for folder in os.get_exec_path()
+            if Path(folder).is_absolute()
+        )
+    )
+    first_error = (None, None, "cli_missing")
+    for path in paths:
+        try:
+            return path, _bundle_at(path, cfg), None
+        except CursorError as exc:
+            code = exc.code
+        except (OSError, RuntimeError):
+            code = "cli_incompatible"
+        if configured or (code != "cli_missing" and first_error[0] is None):
+            first_error = (path, None, code)
+    return first_error
+
+
+def local_bundle(cfg):
+    _, bundle, error = inspect_local_cli(cfg)
+    if error:
+        raise CursorError(error)
+    return bundle
+
+
+def select_transport(cfg):
+    if cfg["transport"] != "auto":
+        return cfg["transport"]
+    # Preserve the legacy choice. A configured local sandbox that fails to
+    # start reports its error; only missing local components select SSH.
+    try:
+        local_bundle(cfg)
+    except CursorError:
+        return "ssh"
+    return "local" if Path(cfg["bubblewrap_binary"]).is_file() else "ssh"
+
+
+def bwrap_argv(cfg, bundle, home, work, *, command=None):
     bwrap = cfg["bubblewrap_binary"]
     if not Path(bwrap).is_file():
         raise CursorError("sandbox_missing")
+    if not os.access(bwrap, os.X_OK):
+        raise CursorError("sandbox_unavailable")
     runtime_roots = [
         Path(p) for p in ("/usr/bin", "/usr/lib", "/lib", "/lib64") if Path(p).exists()
     ]
@@ -119,11 +176,10 @@ def bwrap_argv(cfg, bundle, home, work):
     ):
         if Path(path).exists():
             argv.extend(["--ro-bind", path, path])
+    if bundle is not None:
+        argv.extend(["--ro-bind", str(bundle), "/opt/cursor"])
     argv.extend(
         [
-            "--ro-bind",
-            str(bundle),
-            "/opt/cursor",
             "--bind",
             str(home),
             "/home/cursor",
@@ -136,8 +192,76 @@ def bwrap_argv(cfg, bundle, home, work):
     )
     for name, value in cli_env("/home/cursor").items():
         argv.extend(["--setenv", name, value])
-    argv.extend(["--", "/opt/cursor/cursor-agent", "acp"])
+    argv.extend(["--", *(command or ["/opt/cursor/cursor-agent", "acp"])])
     return argv
+
+
+def direct_scratch():
+    # The service's TMPDIR can itself be a project. Avoid inheriting it and
+    # reject known project markers above the otherwise empty workspace.
+    base = Path("/tmp").resolve()
+    markers = (
+        ".git/HEAD",
+        ".cursor",
+        ".agents/skills",
+        ".claude",
+        "AGENTS.md",
+        "CLAUDE.md",
+        ".mcp.json",
+        "mcp.json",
+    )
+    for parent in (base, *base.parents):
+        git = parent / ".git"
+        if (
+            git.is_file()
+            or git.is_symlink()
+            or any((marker := parent / name).exists() or marker.is_symlink() for name in markers)
+        ):
+            raise CursorError("direct_workspace")
+    return TemporaryDirectory(dir=base, prefix="astrbot-cursor-runtime-")
+
+
+def direct_cli_env(home):
+    temporary = home / "tmp"
+    temporary.mkdir(mode=0o700)
+    return {
+        **cli_env(home),
+        "TMPDIR": str(temporary),
+        "XDG_RUNTIME_DIR": str(temporary),
+        "XDG_STATE_HOME": str(home / ".local/state"),
+        "XDG_CONFIG_DIRS": str(home / ".config"),
+        "XDG_DATA_DIRS": str(home / ".local/share"),
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "CURSOR_AGENT_DISABLE_DEBUG_LOG": "1",
+    }
+
+
+def local_auth_path(cfg):
+    if not cfg["cursor_auth_path"]:
+        raise CursorError("not_logged_in")
+    path = Path(cfg["cursor_auth_path"])
+    if cfg["transport"] == "local_direct":
+        try:
+            parent = path.parent.stat()
+        except FileNotFoundError:
+            raise CursorError("not_logged_in") from None
+        except OSError:
+            raise CursorError("auth_file_permissions") from None
+        if (
+            not stat.S_ISDIR(parent.st_mode)
+            or parent.st_uid != os.geteuid()
+            or parent.st_mode & 0o022
+            or not os.access(path.parent, os.W_OK | os.X_OK)
+        ):
+            raise CursorError("auth_file_permissions")
+    return path
+
+
+def local_credentials(cfg):
+    path = local_auth_path(cfg)
+    direct = cfg["transport"] == "local_direct"
+    return read_browser_credentials(path, private=direct, preserve_metadata=direct)
 
 
 class ProcessOwner:
@@ -154,23 +278,21 @@ class ProcessOwner:
 
     async def start(self):
         cfg = self.cfg
-        mode = cfg["transport"]
-        if mode == "auto":
-            try:
-                local_bundle(cfg)
-                local = Path(cfg["bubblewrap_binary"]).is_file()
-            except CursorError:
-                local = False
-            mode = "local" if local else "ssh"
+        mode = select_transport(cfg)
         self.kind = mode
-        self.scratch = TemporaryDirectory(prefix="astrbot-cursor-runtime-")
-        root = Path(self.scratch.name)
-        env = {"PATH": "/usr/bin:/bin", "HOME": str(root), "LANG": "C.UTF-8"}
         ready = None
         try:
-            if mode == "local":
+            self.scratch = (
+                direct_scratch()
+                if mode == "local_direct"
+                else TemporaryDirectory(prefix="astrbot-cursor-runtime-")
+            )
+            root = Path(self.scratch.name)
+            cwd = root
+            env = {"PATH": "/usr/bin:/bin", "HOME": str(root), "LANG": "C.UTF-8"}
+            if mode in LOCAL_TRANSPORTS:
                 bundle = local_bundle(cfg)
-                self.master_auth = Path(cfg["cursor_auth_path"])
+                self.master_auth = local_auth_path(cfg)
                 try:
                     fd = os.open(
                         self.master_auth.parent / ".astrbot-provider.lock",
@@ -180,20 +302,25 @@ class ProcessOwner:
                 except FileNotFoundError:
                     raise CursorError("not_logged_in") from None
                 self.lock = os.fdopen(fd, "r+b")
-                if not stat.S_ISREG(os.fstat(fd).st_mode):
+                lock_info = os.fstat(fd)
+                if not stat.S_ISREG(lock_info.st_mode):
                     raise CursorError("config")
+                if mode == "local_direct" and (
+                    lock_info.st_uid != os.geteuid() or lock_info.st_mode & 0o077
+                ):
+                    raise CursorError("auth_file_permissions")
                 try:
                     fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise CursorError("runner_in_use") from None
                 # Read only after obtaining the lock, so the previous owner can
                 # finish persisting its refreshed session before we copy it.
-                self.original_auth = read_browser_credentials(self.master_auth)
+                self.original_auth = local_credentials(cfg)
                 home, work = root / "home", root / "work"
                 home.mkdir(mode=0o700)
                 work.mkdir(mode=0o700)
                 self.temporary_auth = home / ".config/cursor/auth.json"
-                write_credentials(self.temporary_auth, self.original_auth)
+                write_credentials(self.temporary_auth, browser_tokens(self.original_auth))
                 (self.temporary_auth.parent / "cli-config.json").write_text(
                     json.dumps(
                         {
@@ -205,8 +332,13 @@ class ProcessOwner:
                         }
                     )
                 )
-                argv = bwrap_argv(cfg, bundle, home, work)
-                ready = {"cwd": "/work", "transport": "local"}
+                if mode == "local":
+                    argv = bwrap_argv(cfg, bundle, home, work)
+                    ready = {"cwd": "/work", "transport": mode}
+                else:
+                    env, cwd = direct_cli_env(home), work
+                    argv = [str(bundle / "cursor-agent"), "--disable-auto-update", "acp"]
+                    ready = {"cwd": str(work), "transport": mode}
             else:
                 argv = ssh_argv(cfg)
                 code, output, error = await run_process(
@@ -229,7 +361,7 @@ class ProcessOwner:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=env,
-                cwd=str(root),
+                cwd=str(cwd),
                 start_new_session=True,
                 close_fds=True,
                 limit=max(cfg["context_max_bytes"] * 2, cfg["output_max_bytes"]) + 65536,
@@ -331,14 +463,25 @@ class ProcessOwner:
                             "process_cleanup_failed", transport=self.kind, code="cleanup_timeout"
                         )
                         raise CursorError("cleanup_timeout") from None
+            finally:
+                if self.kind == "local_direct":
+                    # Also stop children in the original process group if the
+                    # CLI exited while they held no ACP pipe FDs.
+                    try:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
 
     def sync_credentials(self):
         if self.temporary_auth is not None:
             try:
                 refreshed = read_browser_credentials(self.temporary_auth)
-                current = read_browser_credentials(self.master_auth)
-                if current == self.original_auth and refreshed != self.original_auth:
-                    write_credentials(self.master_auth, refreshed)
-                    self.original_auth = refreshed
+                current = local_credentials(self.cfg)
+                if current == self.original_auth and refreshed != browser_tokens(current):
+                    replacement = (
+                        {**current, **refreshed} if self.kind == "local_direct" else refreshed
+                    )
+                    write_credentials(self.master_auth, replacement)
+                    self.original_auth = replacement
             except (CursorError, OSError):
                 record("credential_persist_failed", transport=self.kind, code="auth_persist")

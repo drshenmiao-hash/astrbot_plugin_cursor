@@ -4,8 +4,9 @@ import asyncio
 
 from astrbot.api import logger
 
-from .connectivity import check_connection, test_model
+from .connectivity import check_connection, check_environment, test_model
 from .runtime import live_connection, settings, usage_dashboard
+from .settings import TRANSPORTS
 from .usage import DASHBOARD_RANGES
 
 ROUTE = "/astrbot_plugin_cursor/usage/dashboard"
@@ -39,10 +40,15 @@ class UsagePage:
                 task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-    async def _diagnose(self, action):
+    async def _diagnose(self, action, preview=None):
         cfg = settings()
-        operation = check_connection if action == "check" else test_model
-        return await operation(cfg, live=live_connection(cfg))
+        if action == "environment":
+            if preview is not None and preview != cfg["transport"]:
+                cfg.update(transport=preview, model="")
+            return await check_environment(cfg)
+        if action == "check":
+            return await check_connection(cfg, live=lambda: live_connection(cfg))
+        return await test_model(cfg, live=live_connection(cfg))
 
     async def handle(self):
         from astrbot.api.web import json_response, request
@@ -68,11 +74,22 @@ class UsagePage:
             if username != admin:
                 return error("只有 AstrBot 管理员可以执行诊断。", 403)
             action = body["action"]
-            if len(body) != 1 or action not in ("check", "test"):
+            preview = body.get("transport")
+            valid = action in ("environment", "check", "test") and (
+                set(body) == {"action"}
+                or (
+                    action == "environment"
+                    and set(body) == {"action", "transport"}
+                    and preview in TRANSPORTS
+                )
+            )
+            if not valid:
                 return error("诊断参数无效。", 400)
             if self._diagnostic_task is not None:
                 return error("已有诊断正在执行，请稍后再试。", 409)
-            task = asyncio.create_task(self._diagnose(action))
+            task = asyncio.create_task(
+                self._diagnose(action, preview) if preview is not None else self._diagnose(action)
+            )
             self._diagnostic_task = task
             try:
                 result = await asyncio.shield(task)

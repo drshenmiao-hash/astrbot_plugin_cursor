@@ -2,6 +2,8 @@
 
 import asyncio
 import importlib
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -12,6 +14,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from astrbot.core.provider.register import provider_cls_map, provider_registry
+
+from tests.mock_runtime import MockOwner
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT.parent))
@@ -96,6 +100,80 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         await self.plugin.initialize()
         self.assertEqual(self.manager.reloads, [])
         self.assertIsNone(self.manager.curr_provider_inst)
+
+    async def test_selected_provider_and_explicit_override_use_separate_acp_sessions(self):
+        catalog = [
+            {"modelId": "grok-4.6", "name": "Shared"},
+            {"modelId": "grok-4.7", "name": "Shared"},
+            {"modelId": "refused-model"},
+        ]
+        engine_cls = main.runtime.Engine
+        self.enterContext(patch.dict(os.environ, {"TEST_CURSOR_CATALOG": json.dumps(catalog)}))
+        self.enterContext(
+            patch.object(main.runtime, "Engine", partial(engine_cls, owner_factory=MockOwner))
+        )
+        self.enterContext(
+            patch.object(main.runtime, "_fetch_available_models", AsyncMock(return_value=catalog))
+        )
+        self.model["model"] = "grok-4.6"
+        other = {**self.model, "id": "dashboard-model", "model": "grok-4.7"}
+        self.config["provider"].append(other)
+        plugin = main.CursorCLIPlugin(self.context, {"model_id": "grok-4.6"})
+        self.addAsyncCleanup(plugin.terminate)
+        await plugin.initialize()
+        await self.manager.reload(other)
+        first = self.manager.inst_map[self.model["id"]]
+        second = self.manager.inst_map[other["id"]]
+        self.assertIs(first.engine, second.engine)
+
+        async def chat(provider, session="same", **kwargs):
+            return (
+                await provider.text_chat(prompt="MOCK_MODEL_ID", session_id=session, **kwargs)
+            ).completion_text
+
+        self.manager.curr_provider_inst = first
+        original = await chat(self.manager.curr_provider_inst)
+        self.assertTrue(original.startswith("grok-4.6/"))
+        self.manager.curr_provider_inst = second
+        switched = await chat(self.manager.curr_provider_inst)
+        self.assertTrue(switched.startswith("grok-4.7/"))
+        self.manager.curr_provider_inst = first
+        self.assertEqual(await chat(self.manager.curr_provider_inst), original)
+
+        a, b = await asyncio.gather(chat(first, "a"), chat(second, "b"))
+        self.assertTrue(a.startswith("grok-4.6/"))
+        self.assertTrue(b.startswith("grok-4.7/"))
+        overridden = await chat(first, model="cursor-grok-4.7")
+        self.assertTrue(overridden.startswith("grok-4.7/"))
+        self.assertNotEqual(overridden, switched)
+        self.assertNotEqual(await chat(first), original)
+        for model, code in (
+            ("missing-model", "model_unavailable"),
+            ("Shared", "model_ambiguous"),
+            ("refused-model", "model_mismatch"),
+            ("auto", "model"),
+        ):
+            with self.subTest(model=model), self.assertRaisesRegex(main.CursorError, code):
+                await chat(first, model=model)
+
+        self.manager.curr_provider_inst = second
+        await plugin.initialize()
+        self.assertIs(self.manager.curr_provider_inst, self.manager.inst_map[other["id"]])
+        self.assertTrue((await chat(self.manager.curr_provider_inst)).startswith("grok-4.7/"))
+        self.assertEqual(other["model"], "grok-4.7")
+        report = await main.runtime.usage_dashboard(7)
+        self.assertTrue(
+            {"grok-4.6", "grok-4.7"} <= {row["label"] for row in report["groups"]["model"]}
+        )
+
+        # The registration seed can disappear from the current account's catalog.
+        # The retained, separately registered model must still use ACP normally.
+        replacement = main.CursorCLIPlugin(self.context, {"model_id": "removed-seed"})
+        self.addAsyncCleanup(replacement.terminate)
+        await replacement.initialize()
+        self.assertEqual(main.runtime.settings()["model"], "")
+        self.assertIs(self.manager.curr_provider_inst, self.manager.inst_map[other["id"]])
+        self.assertTrue((await chat(self.manager.curr_provider_inst)).startswith("grok-4.7/"))
 
     async def test_reload_retained_cursor_and_preserve_oauth_selection(self):
         old = provider_module.CursorCLIProvider({"type": "cursor_cli", **self.model}, {})

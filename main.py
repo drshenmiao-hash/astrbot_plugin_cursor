@@ -15,7 +15,7 @@ from .cursor_plugin.web import UsagePage
 __all__ = ["CursorCLIPlugin", "CursorCLIProvider"]
 
 
-@register("astrbot_plugin_cursor", "drshenmiao-hash", "Cursor CLI 常驻聊天 Provider", "0.4.5")
+@register("astrbot_plugin_cursor", "drshenmiao-hash", "Cursor CLI 常驻聊天 Provider", "0.4.6")
 class CursorCLIPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -58,8 +58,8 @@ class CursorCLIPlugin(Star):
     async def cursor_source(self, event: AstrMessageEvent):
         """Show this version's license and corresponding source."""
         yield event.plain_result(
-            "astrbot_plugin_cursor v0.4.5 · AGPL-3.0\n"
-            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/main"
+            "astrbot_plugin_cursor v0.4.6 · AGPL-3.0\n"
+            "源码：https://github.com/drshenmiao-hash/astrbot_plugin_cursor/tree/v0.4.6"
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)

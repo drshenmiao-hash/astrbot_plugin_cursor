@@ -4,6 +4,7 @@
 import asyncio
 import base64
 import json
+import os
 import sys
 
 
@@ -15,6 +16,9 @@ async def main():
     sessions = {}
     running = {}
     counter = 0
+    catalog = json.loads(os.environ.get("TEST_CURSOR_CATALOG", "[]")) or [
+        {"modelId": "mock-plan-model"}
+    ]
 
     def send(value):
         print(json.dumps(value, ensure_ascii=False), flush=True)
@@ -32,6 +36,8 @@ async def main():
             else:
                 await asyncio.sleep(0.05)
             chunks = ["OK"]
+            if "MOCK_MODEL_ID" in text:
+                chunks = [sessions[sid]["model"], f"/{sid}"]
             if "MOCK_STREAM_FAILURE" in text:
                 chunks = ["部分正常回复。", "Error: RetriableError: [unavailable] PING timed out"]
             if "MOCK_IMAGE_REQUIRED" in text:
@@ -88,12 +94,18 @@ async def main():
                 request,
                 {
                     "sessionId": sid,
-                    "models": {"availableModels": [{"modelId": "mock-plan-model"}]},
+                    "models": {"availableModels": catalog},
                     "modes": {"availableModes": [{"id": "ask"}]},
                 },
             )
         elif method == "session/set_config_option":
-            result(request, {"configOptions": [{"id": "model", "currentValue": params["value"]}]})
+            model = params["value"]
+            assert any(entry["modelId"] == model for entry in catalog)
+            if model == "refused-model":
+                result(request, {"configOptions": [{"id": "model", "currentValue": "auto"}]})
+            else:
+                sessions[params["sessionId"]]["model"] = model
+                result(request, {"configOptions": [{"id": "model", "currentValue": model}]})
         elif method == "session/set_mode":
             assert params["modeId"] == "ask"
             result(request, {})

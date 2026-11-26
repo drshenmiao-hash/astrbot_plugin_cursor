@@ -108,7 +108,7 @@ class ACPClient:
                         "terminal": False,
                         "_meta": {"parameterizedModelPicker": True},
                     },
-                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.5"},
+                    "clientInfo": {"name": "astrbot_plugin_cursor", "version": "0.4.6"},
                 },
                 timeout=30,
             )
@@ -162,15 +162,16 @@ class ACPClient:
             if isinstance(m, dict)
         ):
             raise CursorError("ask_unavailable")
-        selected = await self.call(
-            "session/set_config_option",
-            {
-                "sessionId": session_id,
-                "configId": "model",
-                "value": model,
-            },
-            timeout=30,
-        )
+        try:
+            selected = await self.call(
+                "session/set_config_option",
+                {"sessionId": session_id, "configId": "model", "value": model},
+                timeout=30,
+            )
+        except CursorError as exc:
+            if exc.code == "cli_failed":
+                raise CursorError("model_mismatch") from None
+            raise
         options = selected.get("configOptions", [])
         if not any(
             o.get("id") == "model" and o.get("currentValue") == model

@@ -1,25 +1,45 @@
 # 安装与升级
 
-在 AstrBot 插件页用仓库 URL 安装 v0.4.5，或下载 main 源码 ZIP 上传。接口基线为 AstrBot 4.29.4。先在独立测试编排和数据卷中验证联通与真实计费。[main 源码 ZIP](https://github.com/drshenmiao-hash/astrbot_plugin_cursor/archive/refs/heads/main.zip)
+适用 AstrBot 4.29.4 至 5.0 之前的版本。当前插件版本为 v0.4.6。
 
-```bash
-git clone --branch main https://github.com/drshenmiao-hash/astrbot_plugin_cursor.git /opt/astrbot-cursor
-cd /opt/astrbot-cursor
-```
+## 首次配置
 
-需要官方 Cursor CLI，无需 Cursor 桌面版。模型 ID 必须明确指定并自行确认套餐范围；插件不自动换模型。AstrBot 已有的备用模型按框架原有规则接管。
+1. **安装插件。** 在 AstrBot WebUI 的插件页搜索 `astrbot_plugin_cursor`（Cursor CLI），也可直接使用仓库 URL 安装。[GitHub 仓库](https://github.com/drshenmiao-hash/astrbot_plugin_cursor)
+2. **选择运行方式。** 在插件设置查看下表。打开 **Cursor CLI → 用量与运行状态 → 检查环境**，可先检查候选方式，或检查已经保存的配置。需要更改 CLI 路径时可先保存路径，模型暂留空。
+3. **准备 CLI 并登录。** 依照环境检查提示，由管理员在 CLI 实际运行的主机或容器安装组件并完成 Cursor 登录。已有登录可先检查登录文件。
+4. **配置模型。** 填写套餐内的明确 Cursor 模型 ID 并保存。插件校验模型并注册到 AstrBot。[模型 ID 说明](MODEL_IDS.md)
+5. **检查连接。** WebUI 分别显示系统依赖、登录材料、ACP 握手、模型确认和聊天基本条件。进入 AstrBot 选择已启用的 Cursor 模型即可聊天。需要实测时单独点 **测试模型**，该操作可能消耗 Cursor 额度。
 
 ## 选择运行方式
 
-| 方式 | 适用条件 | CLI 位置 |
+| 设置 | 适合场景 | 行为 |
 | --- | --- | --- |
-| `local` | AstrBot 的执行环境内有 CLI、bubblewrap，且允许命名空间隔离 | AstrBot 容器内，或原生部署的同一台主机 |
-| `ssh` | Docker/AppArmor 禁止本地命名空间，或希望凭据只留在专用容器 | 独立 Cursor CLI 容器 |
-| `auto` | 自动选择 | 本地 CLI 和 bubblewrap 文件齐全时选 local，否则选 ssh；隔离失败不会裸跑 |
+| 本地运行（bubblewrap 隔离，`local`） | 推荐用于原生 Linux 或已验证可运行 bubblewrap 的容器 | CLI 只获得隔离内的运行库、临时目录和专用登录材料。创建沙盒失败时停止。 |
+| 本地运行（不使用 bubblewrap，`local_direct`） | 管理员愿意让 CLI 以 AstrBot 用户权限在同一环境运行 | 仍使用临时 HOME、空工作目录、必要环境变量及 Ask 模式。需要明确选择。 |
+| SSH 专用 Runner（`ssh`） | 希望凭据留在专用容器，或当前环境无法使用 bubblewrap | 保留专用 SSH 密钥、固定主机公钥和登录卷。[SSH Runner 部署](SSH_RUNNER.md) |
+| 自动检测（`auto`，原有默认） | 保留已安装实例的选择规则 | 找到本地官方 CLI 和 bubblewrap 时尝试隔离启动。所需组件缺失时尝试已配置的 SSH Runner。隔离启动失败会明确报错。自动检测绝不会选择直接运行。 |
 
-“宿主机装了 CLI”不等于 AstrBot 容器能直接调用它。Docker 用户可以先构建包含 CLI 的新测试镜像；已有可运行的本地环境无需 SSH。不要为本地模式开启 privileged、挂载宿主根目录或 Docker socket；隔离不可用时选择 ssh。
+**直接运行没有操作系统级文件隔离。** CLI 仍可访问 AstrBot 用户有权限访问的文件。若用 root 启动 AstrBot，CLI 也拥有相应的 root 权限。临时 HOME、Ask 模式、权限拒绝和空工作目录能减少常规配置继承，无法保证 CLI 永远读不到外部项目、指令、插件或其他服务凭据。建议采用低权限系统用户或权限受限的容器。不要开启 privileged，也不要挂载宿主根目录或 Docker Socket。
 
-## 本地模式
+## 原生 Linux
+
+在 AstrBot 实际运行用户的环境按 Cursor 官方指南安装。若使用隔离方式，由管理员通过系统包管理器安装 `bubblewrap`。[官方 CLI 安装指南](https://cursor.com/docs/cli/installation)
+
+服务 PATH 中有 `agent` 或 `cursor-agent` 时，CLI 路径可留空。服务看不到终端的 PATH 时，填写 `agent` 或 `cursor-agent` 的绝对路径，例如 `/home/astrbot/.local/bin/agent`。保留官方发行目录中的 `cursor-agent`、`node`、`index.js` 和随包文件。
+
+已有浏览器登录可填写该账户的文件路径，通常为 `~/.config/cursor/auth.json`。插件按照 AstrBot 服务用户解释 `~`。建议使用专用登录目录。若需新登录，使用 AstrBot 运行用户，在管理员终端执行：
+
+```bash
+mkdir -m 700 "$HOME/cursor-plugin-login"
+HOME="$HOME/cursor-plugin-login" AGENT_CLI_CREDENTIAL_STORE=file NO_OPEN_BROWSER=1 \
+  /实际路径/agent login
+```
+
+该命令适用于新建专用目录。把插件登录文件路径设为 `~/cursor-plugin-login/.config/cursor/auth.json`。在管理员终端运行同一环境下的 `agent status` 查看登录。WebUI 只报告检查状态。
+
+## Docker 与 1Panel
+
+CLI 要安装在 AstrBot 容器内，或者放在独立的 [SSH Runner](SSH_RUNNER.md) 中。宿主机上的 CLI 不会自动出现在容器中。在 1Panel 的容器编排中沿用原 AstrBot 启动命令和运行用户，并先用独立测试应用和数据卷验证。
 
 `deploy/Dockerfile.astrbot-local` 为使用 apt 的 AstrBot 基础镜像安装 bubblewrap 和已校验的官方 CLI。固定 Linux amd64 CLI `2026.11.13-eacade1`，发行包 SHA-256：
 
@@ -35,7 +55,7 @@ docker build -f deploy/Dockerfile.astrbot-local \
   -t astrbot-with-cursor-local:test .
 ```
 
-在 1Panel 新建测试编排，使用此镜像，保留原启动命令和 UID，设置独立 AstrBot 数据卷。额外创建专用登录卷，挂载到 `/var/lib/cursor-login`，目录归 AstrBot 实际运行 UID 所有，不放其他服务文件。不要复用线上平台连接。
+Docker 或 1Panel 用户可新建测试编排，使用此镜像，保留原启动命令和 UID，设置独立 AstrBot 数据卷。额外创建专用登录卷，挂载到 `/var/lib/cursor-login`，目录归 AstrBot 实际运行 UID 所有，不放其他服务文件。不要复用线上平台连接。
 
 由你在管理员终端登录；容器名和 UID 换成实际值：
 
@@ -60,58 +80,21 @@ docker exec -it --user '实际UID:实际GID' \
 }
 ```
 
-原生 Ubuntu 部署可使用已有的官方 CLI，填写其实际绝对路径，并安装 `bubblewrap`。使用 AstrBot 运行用户可读写的专用浏览器登录文件；不要指向日常开发工作区。CLI 必须保持官方完整发行目录（包含 `cursor-agent`、`node`、`index.js`）。
+上方镜像可用于两种本地方式。若 **检查环境** 显示容器无法实际建立 bubblewrap 沙盒，可选择 SSH Runner，或由管理员按前述风险说明显式启用直接运行。现有部署由管理员更新配置，插件不改容器权限。
 
-实际聊天创建独立空工作目录和临时 HOME。bubblewrap 只挂载 CLI、系统运行库、证书/DNS及这两个临时目录；不继承 AstrBot 环境变量，不挂载 AstrBot 数据或宿主 HOME。凭据刷新写回专用登录文件。隔离能力必须先诊断，不能仅靠 Ask 提示词作为文件边界。
+## 登录文件与配置
 
-## SSH 模式（按需）
+两种本地方式通过锁串行使用配置中的登录文件。每个 CLI 进程只得到该浏览器登录文件的必要字段副本。直接模式要求文件归 AstrBot 运行用户所有且仅所有者可访问（通常为 `0600`），父目录也须由该用户管理且可写。官方 CLI 刷新令牌后，插件仅在源文件仍与读入时一致的情况下回写必要字段。手动重新登录前先结束使用同一登录文件的 Cursor 进程。插件不会执行登录或退出命令，也不会从 AstrBot 的服务环境传递其他 API Key。
 
-无需在宿主机开放 SSH 端口。连接是 AstrBot 容器通过专用 Docker 网络直达 CLI 容器，不经过宿主机 SSH。
+`model_id` 用于首次校验与注册。若要切换模型，在 AstrBot 的模型提供商页面把套餐内的模型添加到 **Cursor CLI** 来源，再按会话或配置选择它。CLI 目录允许的明确 ID 和唯一别名才会生效。列表中没有 `grok-4.7` 时，选中该模型会报告不可用；可用性取决于你的 CLI 和 Cursor 账号。[模型 ID 说明](MODEL_IDS.md)
 
-```bash
-sudo python3 deploy/prepare_keys.py
-docker network create --internal astrbot-cursor-link
-docker compose -f deploy/compose.yaml build
-docker compose -f deploy/compose.yaml up -d
-```
-
-网络已存在时跳过创建。密钥脚本遇到已有目录会停止，避免覆盖。非 root AstrBot 用户需要将 `deploy/client` 的所有者改为其实际 UID/GID；私钥权限保持 600。
-
-1Panel 可在“容器 → 编排”中使用 `deploy/compose.yaml`，项目目录为 `/opt/astrbot-cursor/deploy`。Runner 只挂载服务端专用密钥与登录卷；不再挂载模型文件，不挂 AstrBot 数据，不发布宿主端口。
-
-由你完成登录：
-
-```bash
-docker compose -f deploy/compose.yaml exec --user cursor cursor-cli /usr/local/bin/cursor-admin login
-docker compose -f deploy/compose.yaml exec --user cursor cursor-cli /usr/local/bin/cursor-admin status
-docker compose -f deploy/compose.yaml exec --user cursor cursor-cli /usr/local/bin/cursor-admin models
-```
-
-常驻 ACP 会持有登录卷锁。重新登录、退出或管理模型前，先在 AstrBot 禁用所有 Cursor 模型实例，等待进程停止；仅停用插件不保证已加载的模型被删除。不要删除锁文件绕过锁。
-
-AstrBot 环境需有 OpenSSH 客户端；缺少时用 `deploy/Dockerfile.astrbot` 从原镜像构建新测试镜像。参考 `deploy/astrbot-service.example.yaml` 合并测试编排字段：只读挂载 `deploy/client` 到 `/run/cursor-client`，连接 `astrbot-cursor-link`，保留原网络、数据卷、启动命令和 UID。示例片段不能替换整个 AstrBot 编排。
-
-配置 `transport=ssh`、`ssh_host=cursor-cli`、`ssh_port=2222`，使用默认专用私钥及 known_hosts 路径。修改主机名/端口时同步 known_hosts，保留主机校验。只需在插件填写模型，原生模型使用自动解析出的 ACP ID。
-
-SSH 清理回执要求插件和运行器的协议版本匹配。可先用 `/cursor_doctor` 检查 `runner_cleanup_protocol`。旧运行器会报 `runner_cleanup_unsupported`。独立校验结束后，只有运行器确认本次 ACP 子进程树已退出并释放锁，插件才发布校验结果。传输中断或回执超时会报 `cleanup_unverified`，可安全检查远端状态后再重载。
-
-SSH 镜像内置健康检查；未登录时显示 unhealthy 是预期结果。诊断分别返回客户端密钥、主机校验、SSH 版本、登录卷和 CLI 构建入口哈希。入口哈希校验不是对整个 Docker 镜像 digest 的远程证明。
-
-## 安装插件与检查
-
-在 AstrBot 插件页上传发布版源码 ZIP，或用仓库 URL 安装。手动安装时把源码放入 `data/plugins/astrbot_plugin_cursor/`，确保 `main.py` 和 `metadata.yaml` 直接位于插件根目录。默认分支和发布包都包含自动注册。
-
-1. 在插件配置填写运行方式及明确 `model_id`，保存并重载。
-2. 插件先连接已登录的官方 CLI，通过 ACP 查询并校验模型列表，不发送聊天提示词。校验成功后自动新增 `cursor_cli` 来源及原生模型。来源的 Key 和 API Base 留空，原生模型的 Key 保存为 `[]`。当前模型声明 text 和 image，由运行端及具体模型判断图片能力，新模型的 `id` 和 `model` 均使用解析后的 ACP modelId。空/auto/default 时只确保来源存在并提示，不创建模型；未登录、模型不存在或映射有歧义时明确报错，不自动换模型。
-3. 以 AstrBot 管理员运行 `/cursor_doctor`。也可在插件根目录执行下列命令；配置 JSON 只包含插件设置，不包含令牌：
+管理员也可运行 `/cursor_doctor`，或运行以下静态检查：
 
 ```bash
 python -m cursor_plugin.diagnostics --config /path/to/plugin-config.json
 ```
 
-环境检查、模拟进程脚本和真实请求验收见 [ACCEPTANCE.md](ACCEPTANCE.md)。WebUI“测试模型”和开启模型请求的验收脚本会消耗真实用量。
-
-自动注册不改变当前默认模型。需要使用 Cursor 时由你在目标会话中选择；已有来源和相同模型会复用，不重复创建或改名。ID 冲突时不会覆盖其他提供商，见 [注册规则](REGISTRATION.md)。
+配置文件只填写设置和路径。真实 CLI 和计费验证见 [验收指南](ACCEPTANCE.md)。
 
 ## 升级与回滚
 

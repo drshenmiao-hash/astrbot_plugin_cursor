@@ -2,6 +2,7 @@
 
 from .errors import MESSAGES
 from .protocol import MODEL_PATTERN
+from .settings import LOCAL_TRANSPORTS
 
 _STAGES = {
     "preflight": "插件预检拒绝",
@@ -48,7 +49,7 @@ def safe_model_id(model_id):
 
 
 def safe_transport(transport):
-    return transport if transport in ("local", "ssh") else None
+    return transport if transport in (*LOCAL_TRANSPORTS, "ssh") else None
 
 
 def failure_stage(code, stage=None, *, sent=False, preflight=False):
@@ -59,6 +60,10 @@ def failure_stage(code, stage=None, *, sent=False, preflight=False):
         "transport",
         "cli_missing",
         "cli_layout",
+        "cli_path_absolute",
+        "cli_not_executable",
+        "cli_incompatible",
+        "direct_workspace",
         "image_receipt_missing",
         "image_sha_mismatch",
     }:

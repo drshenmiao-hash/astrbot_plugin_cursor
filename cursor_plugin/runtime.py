@@ -259,6 +259,18 @@ async def stop_validation():
             _validation_task = None
 
 
+async def ensure_connection_available():
+    # Preserve startup's shared recovery gate for transport/authentication
+    # failures. Registration of a particular model must not gate other models.
+    if _validation_stopped:
+        raise CursorError("closed")
+    if _startup_failure and _available_models is None:
+        try:
+            await ensure_model_validated()
+        except ModelResolutionError:
+            pass  # A reachable catalog was obtained. The request uses its own target.
+
+
 async def _fetch_available_models():
     # Reuse a live runtime only when its connection/account settings match.
     connection_keys = (
@@ -317,6 +329,11 @@ def resolve_model_id(requested):
     return _resolve_catalog_model(requested)
 
 
+def is_catalog_model_id(requested):
+    # A previously confirmed ID must never silently resolve to another model's display name.
+    return any(entry["modelId"] == requested for entry in (_available_models or ()))
+
+
 def _resolve_catalog_model(requested):
     if _available_models is None:
         raise CursorError("model_not_validated")
@@ -329,10 +346,18 @@ def _resolve_catalog_model(requested):
 
 
 async def available_model_ids():
-    await ensure_model_validated()
+    if not settings()["requested_model"]:
+        _check_startup()
+        async with asyncio.timeout(_STARTUP_VALIDATION_BUDGET):
+            catalog = await _fetch_available_models()
+    else:
+        if _available_models is None:
+            await ensure_model_validated()
+        # A valid catalog is usable even when the initial registration ID is unavailable.
+        catalog = _available_models
     return [
         model_id
-        for model_id in catalog_ids(_available_models)
+        for model_id in catalog_ids(catalog)
         if model_id.casefold() not in {"auto", "auto-smart", "default"}
     ]
 
@@ -351,7 +376,7 @@ def acquire_engine():
         or any(
             _engine.cfg.get(key) != value
             for key, value in settings().items()
-            if key != "requested_model"
+            if key not in {"model", "requested_model"}
         )
     ):
         _engine = Engine(settings())
@@ -395,7 +420,7 @@ async def stop_providers(context):
 def live_connection(cfg):
     # Read only. The UI must never lease or rotate a chat session.
     engine = _engine
-    if engine is None or engine.closed or engine.client is None or engine.client.closed:
+    if engine is None or engine.closed:
         return None
     # Resolved model changes don't affect the transport, whereas credentials,
     # paths and Runner settings must still match before reusing health evidence.
@@ -406,6 +431,12 @@ def live_connection(cfg):
     ):
         return None
     client = engine.client
+    if client is None or client.closed:
+        return (
+            {"transport": None, "handshake": False, "authenticated": False}
+            if engine.active or engine.queue.qsize() or engine.has_pending_requests()
+            else None
+        )
     return {
         "transport": safe_transport(engine.owner.kind) if engine.owner is not None else None,
         "handshake": client.handshake_complete,
@@ -526,16 +557,13 @@ async def ensure_default_source_and_model(config):
         )
     else:
         occupied = next((item for item in models if item.get("id") == model_id), None)
-        stale = None
         if occupied is not None and owned(occupied):
             try:
                 if resolve_model(occupied.get("model"), _available_models) == model_id:
                     target = occupied
-            except ModelResolutionError as exc:
-                # A removed model can be repaired. A still-valid or ambiguous
-                # binding may have existing default or fallback references.
-                if exc.code in {"model", "model_unavailable"}:
-                    stale = occupied
+            except ModelResolutionError:
+                # This native ID may still be referenced by a profile or fallback.
+                pass
         if target is None:
             target = next((item for item in owned_models if item.get("model") == model_id), None)
         if target is None:
@@ -549,8 +577,6 @@ async def ensure_default_source_and_model(config):
                 if matched:
                     target = item
                     break
-        if target is None:
-            target = stale
         if target is None and occupied is not None:
             if owned(occupied):
                 logger.warning(

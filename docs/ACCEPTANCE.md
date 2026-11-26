@@ -34,7 +34,7 @@ python tests/check_logic.py
 
 脚本为 `tests/check_environment.py`。五项依次是 PID 复用、同会话并发、取消后断线重连、每轮发送字节、依赖诊断。
 
-每项打印 `PASS`、`FAIL` 或 `SKIP`，紧随 `RAW` JSON，含实际回复、PID、元数据或异常堆栈。依赖探针保留退出码、标准输出和标准错误；不打印认证帧、登录文件内容或 CLI 原始聊天错误。无法观测实际 CLI PID 时明确 SKIP，不用启动器 PID 假冒。异常或断言失败返回非零；缺依赖、未配置、未授权真实模型调用时 SKIP 并说明缺什么，SKIP 不是通过。
+每项打印 `PASS`、`FAIL` 或 `SKIP`，紧随 `RAW` JSON，含验收元数据，例如 PID 和回复结果。环境检查只返回经过筛选的状态、CLI 路径和版本。无法观测实际 CLI PID 时标记 SKIP。异常或断言失败返回非零；未具备配置或授权时，脚本会说明跳过原因。
 
 ### 模拟 ACP 子进程
 
@@ -42,7 +42,7 @@ python tests/check_logic.py
 python tests/check_environment.py --mock
 ```
 
-使用 `tests/mock_acp.py`，无需 Cursor 登录或网络；模拟登录、模型列表及回复。会创建真正的本地子进程以检查生命周期，不能归入 A 的纯函数检查。此命令尚未由作者运行。
+使用 `tests/mock_acp.py` 模拟登录、模型列表及回复，并使用真实的本地子进程检查生命周期。
 
 ### 真实环境
 
@@ -78,7 +78,7 @@ python tests/check_environment.py --config /path/to/plugin-config.json --allow-m
 
 - 原生来源注册、冷启动、连续重载、模型选择和终止清理；原 OpenAI OAuth 插件仍可使用，原有备用模型能按框架规则接管。
 - 两个 QQ 会话隔离、人格与历史正确；观察实际事件环境能显示排队及超时报错；没有稳定会话标识时应记录 `no_stable_session_key`。
-- Ask 固定、客户端文件/终端能力关闭；通过测试环境检查 CLI 看不到 AstrBot 数据与其他服务密钥。A 不覆盖隔离安全边界。
+- Ask 固定、客户端文件与终端能力关闭。在 bubblewrap 和 SSH 测试实例验证文件访问边界。直接模式应核对 HOME、工作目录、环境白名单和临时登录文件；该模式的系统文件访问取决于服务用户权限。
 - 日志只有元数据，无聊天正文或凭据。环境脚本的 RAW 回复只用于管理员验收，不应粘贴到公开日志。
 
 真实计费不能从发送字节或成功回复推断。测试前在 [Cursor 用量页](https://cursor.com/dashboard/usage) 记录时间、套餐用量与额外收费；测试后等待更新，按时间和明确模型核对是否扣套餐。取消、失败和超时也可能产生用量，脚本不会自动重试。CLI 会话复用减少重复传输，但没有证明历史 token 免费、缓存必定命中或费用减半。

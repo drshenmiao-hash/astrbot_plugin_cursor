@@ -309,7 +309,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
                 await runtime.initialize(self.context, stop_existing=True)
         self.assertEqual(dict(self.conf), expected)
 
-    async def test_existing_source_and_model_are_updated_in_place(self):
+    async def test_existing_source_and_legacy_model_alias_are_updated_in_place(self):
         self.conf["provider_sources"].append(
             {
                 "id": "custom-cursor",
@@ -323,7 +323,7 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
             {
                 "id": MODEL,
                 "provider_source_id": "custom-cursor",
-                "model": "old-model",
+                "model": "cursor-" + MODEL,
                 "enable": True,
                 "modalities": ["text", "image", "tool_use"],
                 "temperature": 0.4,
@@ -337,6 +337,23 @@ class RegistrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.cursor_models()[0]["model"], MODEL)
         self.assertEqual(self.cursor_models()[0]["temperature"], 0.4)
         self.assertEqual(self.cursor_models()[0]["modalities"], ["text", "image"])
+
+    async def test_unavailable_model_binding_is_not_overwritten_by_registration_seed(self):
+        self.conf["provider_sources"].append({"id": "cursor_cli", "type": "cursor_cli"})
+        self.conf["provider"].append(
+            {
+                "id": MODEL,
+                "provider_source_id": "cursor_cli",
+                "model": "old-model",
+                "enable": True,
+            }
+        )
+        self.conf["agent"]["config"]["model"]["provider_id"] = MODEL
+        self.conf["provider_settings"]["fallback_chat_models"].append(MODEL)
+        await runtime.initialize(self.context)
+        self.assertEqual(self.cursor_models()[0]["model"], "old-model")
+        self.assertEqual(self.conf["agent"]["config"]["model"]["provider_id"], MODEL)
+        self.assertIn(MODEL, self.conf["provider_settings"]["fallback_chat_models"])
 
     async def test_same_model_alias_is_not_duplicated_or_renamed(self):
         self.conf["provider_sources"].append({"id": "custom-cursor", "type": "cursor_cli"})
